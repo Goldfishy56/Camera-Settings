@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reel Recipes</title>
+<meta name="theme-color" content="#111114">
+<link rel="manifest" href="/static/manifest.json">
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #18181b; --muted: #6b6b73; --line: #e5e3de;
+    --accent: #e4572e; --accent-text: #fff; --chip: #f0eee9; --ok: #2f855a; --warn: #b7791f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111114; --card: #1b1b20; --text: #f2f2f3; --muted: #9c9ca6; --line: #2c2c33;
+      --accent: #ff6b3d; --accent-text: #111; --chip: #26262d; --ok: #68d391; --warn: #f6c05c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 26px; margin: 8px 0 2px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .row { display: flex; gap: 8px; }
+  input[type=url], input[type=search], textarea {
+    flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; }
+  textarea { width: 100%; min-height: 70px; resize: vertical; }
+  button, .btn { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 11px 16px;
+    cursor: pointer; background: var(--chip); color: var(--text); text-decoration: none; white-space: nowrap; }
+  button.primary { background: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .55; cursor: default; }
+  .link { background: none; padding: 0; color: var(--muted); font-weight: 500; text-decoration: underline; }
+  .hint { color: var(--muted); font-size: 14px; margin-top: 10px; }
+  #status { margin-top: 12px; display: none; align-items: center; gap: 10px; }
+  #status.err { color: var(--accent); }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line);
+    border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h2 { font-size: 18px; margin: 28px 0 10px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  #search { max-width: 220px; padding: 8px 10px; font-size: 15px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    cursor: pointer; text-align: left; padding: 0; font-weight: 400; }
+  .tile img, .tile .ph { width: 100%; aspect-ratio: 4/5; object-fit: cover; display: block; background: var(--chip); }
+  .tile div { padding: 8px 10px 10px; }
+  .tile b { display: block; font-size: 14px; line-height: 1.3; }
+  .tile small { color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .chip { background: var(--chip); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+  /* detail */
+  dialog { border: 0; padding: 0; background: transparent; max-width: 760px; width: 100%; color: var(--text); }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  .detail { background: var(--card); border-radius: 16px; padding: 18px 16px 22px; max-height: 92vh; overflow: auto; }
+  .detail h3 { margin: 0; font-size: 22px; outline: none; }
+  .detail h4 { margin: 20px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .detail .top { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 7px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.v { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td .note { display: block; color: var(--muted); font-size: 13px; }
+  .src { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-left: 4px; }
+  .src.inferred { color: var(--warn); border-color: var(--warn); }
+  ul { margin: 0; padding-left: 20px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  details { margin-top: 14px; color: var(--muted); font-size: 14px; }
+  details p { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Reel Recipes</h1>
+  <p class="sub">Paste a photo-tutorial reel. Get every camera &amp; editing setting written down.</p>
+
+  <form class="card" id="form">
+    <div class="row">
+      <input type="url" id="url" placeholder="https://www.instagram.com/reel/…" autocomplete="off" inputmode="url">
+      <button type="button" id="paste" title="Paste from clipboard">Paste</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="go" style="flex:1">Get settings</button>
+    </div>
+    <div class="hint">
+      Link won't load? <button type="button" class="link" id="pick">Upload the video file instead</button>
+      <input type="file" id="file" accept="video/*" hidden>
+    </div>
+    <div id="status"><div class="spinner"></div><span id="statusText"></span></div>
+  </form>
+
+  <h2>Saved looks <input type="search" id="search" placeholder="Search…"></h2>
+  <div class="grid" id="grid"></div>
+</main>
+
+<dialog id="dlg"><div class="detail" id="detail"></div></dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + Editing", not_a_tutorial: "Not a tutorial" };
+const SRC = { voiceover: "said", caption: "caption", on_screen: "on screen", inferred: "estimated" };
+let looks = [];
+
+function setStatus(text, kind) {
+  const el = $("#status");
+  el.style.display = text ? "flex" : "none";
+  el.className = kind === "error" ? "err" : "";
+  el.querySelector(".spinner").style.display = kind === "busy" ? "block" : "none";
+  $("#statusText").textContent = text || "";
+}
+
+async function start(body) {
+  $("#go").disabled = true;
+  setStatus("Starting…", "busy");
+  try {
+    const res = await fetch("/api/analyze", { method: "POST", body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Something went wrong");
+    await poll(data.job_id);
+  } catch (e) {
+    setStatus(e.message, "error");
+  } finally {
+    $("#go").disabled = false;
+  }
+}
+
+async function poll(id) {
+  while (true) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const job = await (await fetch(`/api/jobs/${id}`)).json();
+    if (job.status === "running") { setStatus(job.message, "busy"); continue; }
+    if (job.status === "error") throw new Error(job.message);
+    setStatus("");
+    $("#url").value = "";
+    await loadLooks();
+    open(job.look.id);
+    return;
+  }
+}
+
+$("#form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const url = $("#url").value.trim();
+  if (!url) return setStatus("Paste a reel link first.", "error");
+  const fd = new FormData(); fd.append("url", url); start(fd);
+});
+$("#paste").onclick = async () => {
+  try { $("#url").value = (await navigator.clipboard.readText()).trim(); }
+  catch { $("#url").focus(); }
+};
+$("#pick").onclick = () => $("#file").click();
+$("#file").onchange = () => {
+  const f = $("#file").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("video", f); start(fd);
+  $("#file").value = "";
+};
+
+async function loadLooks() {
+  looks = await (await fetch("/api/looks")).json();
+  renderGrid();
+}
+
+function renderGrid() {
+  const q = $("#search").value.trim().toLowerCase();
+  const shown = looks.filter((l) => !q || JSON.stringify([l.title, l.summary, l.author, l.apps, l.notes]).toLowerCase().includes(q));
+  $("#grid").innerHTML = shown.length ? shown.map((l) => `
+    <button class="tile" data-id="${esc(l.id)}">
+      ${l.thumb ? `<img src="${esc(l.thumb)}" alt="" loading="lazy">` : `<span class="ph"></span>`}
+      <div><b>${esc(l.title)}</b><small>${esc(KIND[l.kind] || "")}${l.author ? " · @" + esc(l.author) : ""}</small></div>
+    </button>`).join("")
+    : `<div class="empty" style="grid-column:1/-1">${looks.length ? "No matches." : "Nothing saved yet — paste your first reel above."}</div>`;
+}
+$("#grid").onclick = (e) => { const t = e.target.closest(".tile"); if (t) open(t.dataset.id); };
+$("#search").oninput = renderGrid;
+
+function groupSettings(settings) {
+  const groups = new Map();
+  for (const s of settings) {
+    if (!groups.has(s.group)) groups.set(s.group, []);
+    groups.get(s.group).push(s);
+  }
+  return groups;
+}
+
+function asText(l) {
+  const lines = [l.title, l.summary, ""];
+  for (const [g, rows] of groupSettings(l.settings)) {
+    lines.push(g + ":");
+    for (const s of rows) lines.push(`  ${s.name}: ${s.value}${s.note ? "  (" + s.note + ")" : ""}`);
+    lines.push("");
+  }
+  if (l.steps.length) lines.push("Steps:", ...l.steps.map((s) => "  • " + s), "");
+  if (l.url) lines.push(l.url);
+  return lines.join("\n").trim();
+}
+
+function open(id) {
+  const l = looks.find((x) => x.id === id); if (!l) return;
+  const list = (items) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
+  const groups = [...groupSettings(l.settings)].map(([g, rows]) => `
+    <h4>${esc(g)}</h4>
+    <table>${rows.map((s) => `<tr>
+      <td>${esc(s.name)}<span class="src ${s.source}">${SRC[s.source] || ""}</span>${s.note ? `<span class="note">${esc(s.note)}</span>` : ""}</td>
+      <td class="v">${esc(s.value)}</td></tr>`).join("")}</table>`).join("");
+
+  $("#detail").innerHTML = `
+    <div class="top">
+      <h3 contenteditable="plaintext-only" id="title" spellcheck="false">${esc(l.title)}</h3>
+      <button id="close" aria-label="Close">✕</button>
+    </div>
+    <p>${esc(l.summary)}</p>
+    <div class="chips">
+      <span class="chip">${esc(KIND[l.kind] || l.kind)}</span>
+      ${l.author ? `<span class="chip">@${esc(l.author)}</span>` : ""}
+      ${[...l.apps, ...l.gear].map((a) => `<span class="chip">${esc(a)}</span>`).join("")}
+    </div>
+    ${groups || (l.kind === "not_a_tutorial" ? "" : `<p class="hint">No exact values were shown in this reel.</p>`)}
+    ${l.steps.length ? `<h4>Steps &amp; tips</h4>${list(l.steps)}` : ""}
+    ${l.missing.length ? `<h4>Couldn't get</h4>${list(l.missing)}` : ""}
+    <h4>My notes</h4>
+    <textarea id="notes" placeholder="e.g. tried it on my beach pics — lower the orange sat">${esc(l.notes || "")}</textarea>
+    <div class="actions">
+      <button class="primary" id="copy">Copy settings</button>
+      ${l.url ? `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open reel</a>` : ""}
+      <button id="del">Delete</button>
+    </div>
+    ${l.caption || l.transcript ? `<details><summary>Caption &amp; voiceover</summary>
+      ${l.caption ? `<p>${esc(l.caption)}</p>` : ""}${l.transcript ? `<p><i>${esc(l.transcript)}</i></p>` : ""}</details>` : ""}`;
+
+  const save = async (changes) => {
+    Object.assign(l, changes);
+    await fetch(`/api/looks/${l.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) });
+    renderGrid();
+  };
+  $("#title").onblur = (e) => { const t = e.target.textContent.trim(); if (t && t !== l.title) save({ title: t }); };
+  $("#notes").onchange = (e) => save({ notes: e.target.value });
+  $("#close").onclick = () => $("#dlg").close();
+  $("#copy").onclick = async (e) => {
+    await navigator.clipboard.writeText(asText(l));
+    e.target.textContent = "Copied!"; setTimeout(() => (e.target.textContent = "Copy settings"), 1500);
+  };
+  $("#del").onclick = async () => {
+    if (!confirm("Delete this look?")) return;
+    await fetch(`/api/looks/${l.id}`, { method: "DELETE" });
+    $("#dlg").close(); loadLooks();
+  };
+  $("#dlg").showModal();
+  $("#detail").scrollTop = 0;
+}
+$("#dlg").addEventListener("click", (e) => { if (e.target === $("#dlg")) $("#dlg").close(); });
+
+loadLooks();
+
+// Support sharing straight into the app: /?url=<reel link> (iOS Shortcut / Android share target).
+const shared = new URLSearchParams(location.search);
+const sharedUrl = shared.get("url") || (shared.get("text") || "").match(/https?:\/\/\S+/)?.[0];
+if (sharedUrl) {
+  history.replaceState(null, "", "/");
+  $("#url").value = sharedUrl;
+  $("#form").requestSubmit();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+anthropic>=1.11.0
+flask>=3.0
+yt-dlp>=2026.8.19
+# Optional but recommended: transcribes the voiceover so spoken settings get picked up.
+faster-whisper>=1.2.1

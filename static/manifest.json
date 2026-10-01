@@ -1,0 +1,13 @@
+{
+  "name": "Reel Recipes",
+  "short_name": "Reel Recipes",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111114",
+  "theme_color": "#111114",
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  }
+}
