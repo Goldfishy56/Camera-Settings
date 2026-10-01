@@ -194,7 +194,7 @@
 <div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
 
 <script>
-const VERSION = "2.0";
+const VERSION = "2.1";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
@@ -371,9 +371,15 @@ function dedupe(settings) {
 // two different panels come back with the same color, relabel the panels in time order with
 // the fewest changes that makes the colors run in order.
 const MIXER = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
+// Color grading wheels look alike too (Midtones read as Shadows, Highlights as Midtones).
+const WHEELS = ["Shadows", "Midtones", "Highlights", "Global"];
 function fixMixerOrder(settings) {
+  return fixOrder(fixOrder(settings, MIXER, /mixer|hsl/i), WHEELS, /grading|split ton/i);
+}
+function fixOrder(settings, ORDER, groupRe) {
+  const MIXER = ORDER;  // the logic below was written for the color mixer
   const colorOf = (s) => MIXER.findIndex((c) => s.name.toLowerCase().startsWith(c.toLowerCase() + " "));
-  const isMixer = (s) => /mixer|hsl/i.test(s.group) && colorOf(s) >= 0;
+  const isMixer = (s) => groupRe.test(s.group) && colorOf(s) >= 0;
   const panels = [];
   for (const s of settings.filter(isMixer)) {
     const prop = s.name.slice(MIXER[colorOf(s)].length + 1).toLowerCase();
