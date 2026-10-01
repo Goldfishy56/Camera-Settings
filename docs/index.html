@@ -194,7 +194,7 @@
 <div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
 
 <script>
-const VERSION = "2.1";
+const VERSION = "2.3";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
@@ -279,6 +279,7 @@ function asText(l) {
   }
   if (l.steps.length) out.push("Steps:", ...l.steps.map((s) => "  • " + s), "");
   if (l.url) out.push(l.url);
+  if (l.readWith) out.push(`(Read by Reel Recipes v${l.readWith.version}${l.readWith.video ? ` from ${l.readWith.screens} moments` : ""})`);
   return out.join("\n").trim();
 }
 function groups(settings) {
@@ -446,7 +447,7 @@ How to work:
 2. Include every slider that is touched, even briefly or quickly, and even if it is set back to 0. Small changes count (e.g. Texture -5).
 3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). In Lightroom's color mixer the row of dots is always Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta, and the color being edited is the FILLED dot (solid, with a white center). Don't judge it by color: count its position from the left, 1 = Red, 2 = Orange, 3 = Yellow, 4 = Green, 5 = Aqua, 6 = Blue, 7 = Purple, 8 = Magenta. Name each panel by that position, and treat every color's panel as separate even if its numbers look like the previous one. Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
 4. Read numbers carefully from the screen. If a value changes several times, give the value it ends on.
-5. Panels and text cards often flash by for a fraction of a second. You also get sharp pictures of the video about every 0.2 seconds, packed 4 to an image with a yellow time label on each: read every one, and list every control and value on every panel shown (all sliders visible on it, not just the one being moved). Use the moment's time label as the time. The same panel usually appears in 2-3 moments in a row; list it once. But two moments only count as the same panel if the same item is selected (same filled dot, same wheel) AND every number matches. If the filled dot or ANY number differs, it is a different panel (e.g. Red then Orange in a color mixer can both show Hue -3 but differ in Saturation): list both.
+5. Panels and text cards often flash by for a fraction of a second; close-up pictures of every moment are read separately, so here focus on what is said out loud, the caption, and the overall look.
 
 Before the settings, fill "screens": go through the moments one at a time (every grid cell, by its time label) and write down what each one shows and every label and number on it; for a run of moments showing exactly the same panel (same filled dot and identical numbers) you may write one entry. For color mixer moments, always start the note with the filled dot's position and color, e.g. "dot 2 of 8 filled = Orange". Then build "settings" from your screens notes plus the voiceover and caption, so no panel is skipped or mixed up with its neighbour.
 
@@ -590,16 +591,31 @@ function buildFromMoments(moments) {
     return { time: Number(m?.time), key: (group + "|" + sel).toLowerCase(), rows };
   }).filter((r) => r.rows.length && Number.isFinite(r.time)).sort((a, b) => a.time - b.time);
 
+  // Each panel shows in several moments; readings of a blurry or mid-transition moment can be
+  // off. Group consecutive readings of the same panel, then vote per control: the value seen
+  // in the longest run of moments wins (ties: the latest, i.e. where a moving slider ended).
   const instances = [];
+  const consensus = (inst, name) => { const vs = inst.values.get(name); return vs[vs.length - 1].value; };
   for (const r of readings) {
     const last = instances[instances.length - 1];
     if (last && last.key === r.key) {
-      const differing = r.rows.filter((row) => last.values.has(row.name) && last.values.get(row.name).value !== row.value).length;
-      if (differing < 2) { for (const row of r.rows) last.values.set(row.name, { ...row, time: last.time }); continue; }
+      const differing = r.rows.filter((row) => last.values.has(row.name) && consensus(last, row.name) !== row.value).length;
+      if (differing < 2) {
+        for (const row of r.rows) { if (!last.values.has(row.name)) last.values.set(row.name, []); last.values.get(row.name).push(row); }
+        continue;
+      }
     }
-    instances.push({ key: r.key, time: r.time, values: new Map(r.rows.map((row) => [row.name, { ...row, time: r.time }])) });
+    instances.push({ key: r.key, time: r.time, values: new Map(r.rows.map((row) => [row.name, [row]])) });
   }
-  const rows = instances.flatMap((i) => [...i.values.values()]);
+  const vote = (readingsOfOne) => {
+    let best = null, bestLen = 0, runVal = null, runLen = 0;
+    for (const row of readingsOfOne) {
+      runLen = row.value === runVal ? runLen + 1 : 1; runVal = row.value;
+      if (runLen >= bestLen) { bestLen = runLen; best = row; }
+    }
+    return best;
+  };
+  const rows = instances.flatMap((i) => [...i.values.values()].map((vs) => ({ ...vote(vs), time: i.time })));
   return dedupe(fixMixerOrder(sortByTime(rows)));
 }
 
@@ -698,9 +714,9 @@ async function thumbOf(file) {
 // the frames Gemini samples and is too small for it to read. Look-alike panels (Red vs
 // Orange in a color mixer) also can't be told apart by guessing where the screen changed.
 // So: in every part of the video that isn't standing still, take a sharp picture every
-// ~0.2s (faster than any panel stays up), label each with its time, and pack 4 into one
+// ~0.15s (so even a third-of-a-second panel gets at least two pictures), label each with its time, and pack 4 into one
 // image to stay inside Gemini's free limits.
-const MAX_FRAMES = 160;   // 40 grid images
+const MAX_FRAMES = 200;   // 50 grid images
 const PER_SHEET = 4;      // 2 x 2
 async function scanStills(file, onProgress) {
   const v = document.createElement("video");
@@ -727,7 +743,7 @@ async function scanStills(file, onProgress) {
     const sw = 48, sh = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
     const small = document.createElement("canvas"); small.width = sw; small.height = sh;
     const sctx = small.getContext("2d", { willReadFrequently: true });
-    const step = Math.max(0.1, d / 600);
+    const step = Math.max(0.075, d / 600);  // finer than the 0.15s gap, so picks land every ~0.15s
     const samples = [];
     for (let t = 0; t < d; t += step) {
       if (!(await seekTo(t))) { if (failed > 20) break; continue; }
@@ -751,7 +767,7 @@ async function scanStills(file, onProgress) {
       if (end.t - kept[kept.length - 1].t > 0.15) kept.push(end);
       return kept.map((k) => k.t);
     };
-    let gap = 0.2, times = select(gap);
+    let gap = 0.15, times = select(gap);
     while (times.length > MAX_FRAMES) { gap += 0.05; times = select(gap); }
 
     // 3. Sharp pictures, labelled with their time, packed 2 x 2 into each image.
@@ -855,7 +871,7 @@ $("#go").addEventListener("click", async () => {
       for (let b = 0; b < total; b++) {
         setStatus(`Reading the settings screens… part ${b + 1} of ${total}`, "busy");
         const batch = sheets.slice(b * BATCH, (b + 1) * BATCH);
-        const batchParts = [{ text: `Below are ${batch.length} images from part of a tutorial video. Each is a 2 x 2 grid of moments, in time order: top-left, top-right, bottom-left, bottom-right. The yellow label on each moment is its time in seconds. Moments are about 0.2 seconds apart. Read every moment, one by one.` }];
+        const batchParts = [{ text: `Below are ${batch.length} images from part of a tutorial video. Each is a 2 x 2 grid of moments, in time order: top-left, top-right, bottom-left, bottom-right. The yellow label on each moment is its time in seconds. Moments are about 0.15 seconds apart. Read every moment, one by one.` }];
         for (const sh of batch) batchParts.push({ text: sh.label }, { inline_data: { mime_type: "image/jpeg", data: sh.data } });
         batchParts.push({ text: "Return one entry for every moment that shows settings, in time order." });
         try {
