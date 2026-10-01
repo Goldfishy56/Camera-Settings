@@ -194,7 +194,7 @@
 <div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
 
 <script>
-const VERSION = "1.9";
+const VERSION = "2.0";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
@@ -340,7 +340,7 @@ function cleanSettings(list) {
     time: Number.isFinite(Number(s?.time)) ? Number(s.time) : null,
     group: (str(s?.group).replace(/\s*(?:[›‱′»>|\\/]+|\s[-–—:]\s)\s*/g, " › ").replace(/\s+/g, " ").trim()) || "Settings",
     name: str(s?.name).trim().replace(/\bSat\b\.?/gi, "Saturation").replace(/\bLum\b\.?/gi, "Luminance").replace(/\bTemp\b\.?(?=\s|$)/g, "Temp"),
-    value: str(s?.value).trim(),
+    value: str(s?.value).trim().replace(/^([+\-−–])\s+(?=\d)/, "$1"),  // Lightroom shows "- 3"
     note: str(s?.note), source: SRC[s?.source] ? s.source : "on_screen",
   })).filter((s) => s.name && s.value);
 }
@@ -529,13 +529,81 @@ async function uploadVideo(file, signal) {
   return f;
 }
 
+const MOMENTS_SYSTEM = `You read settings off pictures of a photo-editing or camera tutorial video.
+
+You get images that are each a 2 x 2 grid of moments from the video (top-left, top-right, bottom-left, bottom-right, in time order). Each moment has a yellow label with its time in seconds.
+
+For EVERY moment that shows a settings panel, camera screen, or text listing settings, return one entry, even if it looks the same as the moment before. Do not merge or skip moments: the app compares them itself. You may leave out moments that show no settings at all (a person talking, a plain photo).
+
+Each entry:
+- time: the moment's yellow time label, as a number.
+- panel: the app and panel, e.g. "Lightroom › Light", "Lightroom › Color", "Lightroom › Color Mixer", "Lightroom › Color Grading", "Lightroom › Effects", "Camera".
+- selected: what is being edited when the panel has a selector, otherwise "". In Lightroom's color mixer it is the color of the FILLED dot (solid, with a white center) in the row Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta; count its position from the left to be sure (1 = Red … 8 = Magenta) and give the color name. In color grading it is the selected wheel: Shadows, Midtones, Highlights or Global.
+- values: every control on the panel with its value, exactly as shown (signs and decimals), e.g. {"name": "Saturation", "value": "+5"}. Use the panel's own short names (Hue, Saturation, Luminance; Exposure, Contrast…). If a control shows no number, estimate it from the slider position (centered = 0) and set estimated to true.`;
+
+const MOMENTS_SCHEMA = {
+  type: "object",
+  properties: {
+    moments: { type: "array", items: { type: "object", properties: {
+      time: { type: "number" },
+      panel: { type: "string" },
+      selected: { type: "string" },
+      values: { type: "array", items: { type: "object", properties: {
+        name: { type: "string" }, value: { type: "string" }, estimated: { type: "boolean" },
+      }, required: ["name", "value"] } },
+    }, required: ["time", "panel", "selected", "values"] } },
+  },
+  required: ["moments"],
+};
+
+// Turn per-moment readings into settings: name values by what is selected, collapse
+// repeated readings of the same panel (keeping the latest when a single slider moves),
+// then fix the color mixer order and drop duplicates.
+function buildFromMoments(moments) {
+  const str = (x) => (typeof x === "string" ? x : x == null ? "" : String(x));
+  const GENERIC = /^(hue|saturation|luminance|lum|sat|balance|blending)$/i;
+  const selectedName = (panel, selected) => {
+    const sel = str(selected).trim();
+    if (!sel) return "";
+    if (/mixer|hsl/i.test(panel)) {
+      const byName = MIXER.find((c) => new RegExp("\\b" + c + "\\b", "i").test(sel));
+      if (byName) return byName;
+      const n = Number((sel.match(/\b([1-8])\b/) || [])[1]);
+      return n ? MIXER[n - 1] : sel;
+    }
+    return sel.replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+  const readings = (Array.isArray(moments) ? moments : []).map((m) => {
+    const rows = cleanSettings((Array.isArray(m?.values) ? m.values : []).map((v) => ({
+      time: m?.time, group: m?.panel, name: v?.name, value: v?.value,
+      source: v?.estimated ? "inferred" : "on_screen", note: v?.estimated ? "Estimated from the slider position" : "",
+    })));
+    const group = rows[0]?.group || "Settings";
+    const sel = selectedName(group, m?.selected);
+    for (const r of rows) if (sel && GENERIC.test(r.name)) r.name = sel + " " + r.name;
+    return { time: Number(m?.time), key: (group + "|" + sel).toLowerCase(), rows };
+  }).filter((r) => r.rows.length && Number.isFinite(r.time)).sort((a, b) => a.time - b.time);
+
+  const instances = [];
+  for (const r of readings) {
+    const last = instances[instances.length - 1];
+    if (last && last.key === r.key) {
+      const differing = r.rows.filter((row) => last.values.has(row.name) && last.values.get(row.name).value !== row.value).length;
+      if (differing < 2) { for (const row of r.rows) last.values.set(row.name, { ...row, time: last.time }); continue; }
+    }
+    instances.push({ key: r.key, time: r.time, values: new Map(r.rows.map((row) => [row.name, { ...row, time: r.time }])) });
+  }
+  const rows = instances.flatMap((i) => [...i.values.values()]);
+  return dedupe(fixMixerOrder(sortByTime(rows)));
+}
+
 let detailed = true;  // switched off for good if the model rejects high-detail video
-function requestBody(parts) {
-  const config = { response_mime_type: "application/json", response_json_schema: SCHEMA };
+function requestBody(parts, opts = {}) {
+  const config = { response_mime_type: "application/json", response_json_schema: opts.schema || SCHEMA };
   if (detailed) config.media_resolution = "MEDIA_RESOLUTION_HIGH";
   const fps = 2;
   return JSON.stringify({
-    system_instruction: { parts: [{ text: SYSTEM }] },
+    system_instruction: { parts: [{ text: opts.system || SYSTEM }] },
     contents: [{ role: "user", parts: parts.map((p) => (p.video_metadata ? { ...p, video_metadata: { fps } } : p)) }],
     generation_config: config,
   });
@@ -543,7 +611,7 @@ function requestBody(parts) {
 // A model that is out of quota or overloaded twice is skipped for the rest of the reel,
 // so a busy main model doesn't add a long wait to every request.
 let strikes = new Map();
-async function askGemini(parts, signal) {
+async function askGemini(parts, signal, opts) {
   let lastErr;
   for (let attempt = 0; attempt < 5; attempt++) {
     const model = MODEL_ORDER.find((m) => (strikes.get(m) || 0) < 2);
@@ -552,12 +620,12 @@ async function askGemini(parts, signal) {
       let res;
       try {
         res = await gfetch(`${API}/v1beta/models/${model}:generateContent`,
-          { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts) }, signal);
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts, opts) }, signal);
       } catch (e) {
         if (!(detailed && e instanceof GeminiError && e.status === 400 && !/api key/i.test(e.message))) throw e;
         detailed = false;
         res = await gfetch(`${API}/v1beta/models/${model}:generateContent`,
-          { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts) }, signal);
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts, opts) }, signal);
       }
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
@@ -783,18 +851,17 @@ $("#go").addEventListener("click", async () => {
         const batch = sheets.slice(b * BATCH, (b + 1) * BATCH);
         const batchParts = [{ text: `Below are ${batch.length} images from part of a tutorial video. Each is a 2 x 2 grid of moments, in time order: top-left, top-right, bottom-left, bottom-right. The yellow label on each moment is its time in seconds. Moments are about 0.2 seconds apart. Read every moment, one by one.` }];
         for (const sh of batch) batchParts.push({ text: sh.label }, { inline_data: { mime_type: "image/jpeg", data: sh.data } });
-        batchParts.push({ text: "This is only one part of the video. List every setting shown in these moments (only what is visible here). If no settings panel is visible, return an empty settings list." });
+        batchParts.push({ text: "Return one entry for every moment that shows settings, in time order." });
         try {
-          const r = await askGemini(batchParts, ctl.signal);
-          onScreen.push(...cleanSettings(r?.settings));
-          for (const k of ["apps", "gear", "missing"]) for (const x of clean(r)[k]) if (!first[k].includes(x)) first[k].push(x);
+          const r = await askGemini(batchParts, ctl.signal, { system: MOMENTS_SYSTEM, schema: MOMENTS_SCHEMA });
+          onScreen.push(...(Array.isArray(r?.moments) ? r.moments : []));
         } catch (e) {
           if (e?.name === "AbortError") throw e;
           first.missing.push(`Part ${b + 1} of the video's settings screens couldn't be read (${friendly(e) || "error"}). Try again later.`);
         }
       }
       // What was read from the screens wins; the video pass adds what was only said or captioned.
-      first.settings = mergeSettings(dedupe(fixMixerOrder(sortByTime(onScreen))), first.settings, false);
+      first.settings = mergeSettings(buildFromMoments(onScreen), first.settings, false);
     }
     const look = {
       id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
