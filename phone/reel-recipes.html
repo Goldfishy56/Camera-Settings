@@ -42,6 +42,8 @@
   header p { margin: 6px 0 0; color: var(--muted); max-width: 46ch; }
 
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+  .howto { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 15px; }
+  label.field small { color: var(--muted); font-size: 13px; }
   .pick { display: grid; place-items: center; gap: 4px; text-align: center; border: 2px dashed var(--line);
     border-radius: 12px; padding: 20px 12px; cursor: pointer; }
   .pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -120,6 +122,10 @@
 
   <section class="panel" aria-labelledby="load-title">
     <h2 id="load-title" hidden>Load a reel</h2>
+    <ol class="howto">
+      <li>In Instagram, tap <b>⋯</b> on the reel → <b>Download</b> (or screen-record it).</li>
+      <li>Choose that video below and tap <b>Get settings</b>.</li>
+    </ol>
     <label class="pick" for="file">
       <b id="pickTitle">Choose the reel video</b>
       <span id="pickSub">From Photos or Files. Screenshots work too.</span>
@@ -129,6 +135,7 @@
       <summary>Add the link, caption or what they said (optional)</summary>
       <label class="field">Reel link
         <input type="url" id="link" placeholder="https://www.instagram.com/reel/…" autocomplete="off">
+        <small id="linkHint" hidden>Saved with the look so you can find the reel again. Instagram won't let this page download from a link, so choose the saved video above too.</small>
       </label>
       <label class="field">Caption
         <textarea id="caption" placeholder="Paste the caption if it lists settings"></textarea>
@@ -138,7 +145,7 @@
       </label>
     </details>
     <div class="row">
-      <button class="primary grow" id="go" disabled>Get settings</button>
+      <button class="primary grow" id="go">Get settings</button>
       <button id="stop" hidden>Stop</button>
     </div>
     <div class="status" id="status" hidden><span class="spin" id="spin"></span><span id="statusText"></span></div>
@@ -405,7 +412,7 @@ $("#file").addEventListener("change", () => {
   $("#pickTitle").textContent = vids.length ? vids[0].name || "Video selected"
     : picked.length ? `${picked.length} screenshot${picked.length > 1 ? "s" : ""} selected` : "Choose the reel video";
   $("#pickSub").textContent = picked.length ? "Tap to choose something else" : "From Photos or Files. Screenshots work too.";
-  $("#go").disabled = !picked.length || !sample;
+  $("#go").disabled = !sample;
   setStatus(sample ? "" : "Connecting to Claude…", sample ? null : "busy");
 });
 
@@ -418,8 +425,17 @@ function setStatus(text, kind) {
 
 $("#stop").addEventListener("click", () => ctl?.abort());
 
+$("#link").addEventListener("input", () => { $("#linkHint").hidden = !$("#link").value.trim(); });
+
 $("#go").addEventListener("click", async () => {
-  if (!picked.length || !sample) return;
+  if (!sample) { setStatus("Still connecting to Claude. Give it a few seconds.", "busy"); return; }
+  if (!picked.length) {
+    setStatus($("#link").value.trim()
+      ? "Instagram won't let this page download from a link. Save the reel to your phone first (⋯ → Download, or screen-record it), then choose that video."
+      : "Choose the reel video first.", "error");
+    $("#file").click();
+    return;
+  }
   const limits = await sample.limits().catch(() => null);
   if (!limits?.images) { setStatus(ERRORS.images_unavailable, "error"); return; }
   const maxImages = Math.max(1, Math.min(limits.images.maxCount, 16));
@@ -468,7 +484,7 @@ $("#go").addEventListener("click", async () => {
     else setStatus(ERRORS[e?.code] || "Something went wrong reaching Claude. Tap Get settings to try again.", "error");
   } finally {
     $("#stop").hidden = true;
-    $("#go").disabled = !picked.length;
+    $("#go").disabled = false;
   }
 });
 
@@ -480,7 +496,7 @@ initStore();
     $("#go").disabled = true;
     setStatus("Open this page in the Claude app or on claude.ai to read reels.", "error");
   } else {
-    $("#go").disabled = !picked.length;
+    $("#go").disabled = false;
     if ($("#statusText").textContent === "Connecting to Claude…") setStatus("");
   }
 });
