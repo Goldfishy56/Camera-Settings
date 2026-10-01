@@ -189,10 +189,12 @@
   </section>
 </div>
 
+<p class="note" id="version" style="text-align:center;padding-bottom:24px"></p>
+
 <div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
 
 <script>
-
+const VERSION = "1.5";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
@@ -304,6 +306,7 @@ function openLook(l) {
     ${l.steps.length ? `<div><h4>Steps and tips</h4>${list(l.steps)}</div>` : ""}
     ${l.missing.length ? `<div><h4>Couldn't read</h4>${list(l.missing)}</div>` : ""}
     ${l.example ? "" : `<label class="field">My notes<textarea id="notes" placeholder="How it worked on your photos">${esc(l.notes || "")}</textarea></label>`}
+    ${l.example ? "" : l.readWith ? `<p class="note">Read by v${esc(l.readWith.version)}${l.readWith.video ? ` from ${l.readWith.screens} screen${l.readWith.screens === 1 ? "" : "s"} of the video` : ""}.</p>` : `<p class="note">Read by an older version (before v1.5).</p>`}
     <div class="row">
       <button class="primary" id="copy">Copy settings</button>
       ${l.url ? `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open reel</a>` : ""}
@@ -564,16 +567,24 @@ async function thumbOf(file) {
 const MAX_STILLS = 60;
 async function scanStills(file, onProgress) {
   const v = document.createElement("video");
-  v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = URL.createObjectURL(file);
+  v.muted = true; v.playsInline = true; v.preload = "auto";
+  v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+  // iPhone Safari decodes more reliably when the video is in the page (just invisible).
+  v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
+  document.body.appendChild(v);
+  v.src = URL.createObjectURL(file);
+  let failed = 0;
   const seekTo = async (t) => {
-    const done = waitFor(v, "seeked", 5000);
+    const done = waitFor(v, "seeked", 3000);
     v.currentTime = Math.max(t, 0.001);  // never exactly 0: iPhone Safari can draw a blank frame
-    await done;
+    try { await done; return true; } catch { failed++; return false; }
   };
   try {
-    await waitFor(v, "loadeddata", 10000);
+    await waitFor(v, "loadedmetadata", 15000);
+    try { await v.play(); v.pause(); } catch { /* muted play may be refused; seeking still works */ }
+    if (v.readyState < 2) await waitFor(v, "loadeddata", 10000).catch(() => {});
     const d = v.duration;
-    if (!isFinite(d) || d <= 0) return [];
+    if (!isFinite(d) || d <= 0 || !v.videoWidth) return [];
 
     // 1. Tiny greyscale samples to spot changes.
     const sw = 48, sh = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
@@ -582,13 +593,14 @@ async function scanStills(file, onProgress) {
     const step = Math.max(0.1, d / 400);
     const samples = [];
     for (let t = 0; t < d; t += step) {
-      await seekTo(t);
+      if (!(await seekTo(t))) { if (failed > 20) break; continue; }
       sctx.drawImage(v, 0, 0, sw, sh);
       const px = sctx.getImageData(0, 0, sw, sh).data, g = new Uint8Array(sw * sh);
       for (let i = 0; i < g.length; i++) g[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
       samples.push({ t, g });
       onProgress?.(t / d);
     }
+    if (samples.length < 2) return [];
     const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
 
     // 2. Keep a sample whenever it differs enough from the last one kept.
@@ -616,14 +628,14 @@ async function scanStills(file, onProgress) {
     c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
     const stills = [];
     for (const t of times) {
-      await seekTo(t);
+      if (!(await seekTo(t))) continue;
       c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
       const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
       if (blob) stills.push({ t, blob });
     }
     return stills;
   } catch { return []; }  // the video alone still works
-  finally { URL.revokeObjectURL(v.src); }
+  finally { URL.revokeObjectURL(v.src); v.remove(); }
 }
 
 /* ---------- main flow ---------- */
@@ -661,6 +673,7 @@ $("#go").addEventListener("click", async () => {
   $("#go").disabled = true; $("#stop").hidden = false;
   try {
     const parts = [], stillParts = [];
+    let shots = [];
     if (video) {
       if (video.size <= INLINE_LIMIT) {
         setStatus("Getting the video ready…", "busy");
@@ -671,7 +684,7 @@ $("#go").addEventListener("click", async () => {
         parts.push({ file_data: { file_uri: uploaded.uri, mime_type: uploaded.mimeType }, video_metadata: { fps: 2 } });
       }
       setStatus("Scanning the video for settings screens…", "busy");
-      const shots = await scanStills(video, (f) => setStatus(`Scanning the video for settings screens… ${Math.round(f * 100)}%`, "busy"));
+      shots = await scanStills(video, (f) => setStatus(`Scanning the video for settings screens… ${Math.round(f * 100)}%`, "busy"));
       if (shots.length) {
         stillParts.push({ text: `Sharp stills of every moment the screen changes, in order (${shots.length} total). Settings panels may flash by for only a fraction of a second, so read every number on every still:` });
         for (const shot of shots) {
@@ -705,6 +718,7 @@ $("#go").addEventListener("click", async () => {
     const look = {
       id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       ...first, url: $("#link").value.trim(), notes: "", created: Date.now(),
+      readWith: { version: VERSION, screens: shots.length, video: !!video },
       thumb: await thumbOf(video || images[0]),
     };
     await saveLook(look);
@@ -722,6 +736,7 @@ $("#go").addEventListener("click", async () => {
 });
 
 /* ---------- start ---------- */
+$("#version").textContent = "Reel Recipes v" + VERSION;
 looks = loadLooks();
 render();
 showKeyCard(!getKey());
