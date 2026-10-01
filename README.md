@@ -2,7 +2,7 @@
 
 Scrolling Instagram and see a reel like *"here's how I get this warm film look"*? Paste the link into Reel Recipes and it writes down every camera setting and editor slider for you, then saves the look in your library.
 
-**How it works:** downloads the reel → pulls ~40 frames from it → transcribes the voiceover → Claude reads the caption, the voiceover and the frames (including slider numbers shown on screen) → you get a tidy card like:
+**How it works:** downloads the reel → Google's Gemini watches the whole video with sound (reading slider numbers shown on screen and listening to the voiceover) along with the caption → you get a tidy card like:
 
 | Lightroom › Light | |
 |---|---|
@@ -13,7 +13,7 @@ Every value is tagged by where it came from (*on screen*, *said*, *caption*, or 
 
 ## Setup (one time)
 
-You need **Python 3.10+**, **ffmpeg**, and an **Anthropic API key** (from https://console.anthropic.com).
+You need **Python 3.10+**, **ffmpeg**, and a **free Gemini API key**: go to https://aistudio.google.com, sign in with a Google account, click **Get API key → Create API key**. No credit card needed.
 
 ```bash
 # macOS: brew install ffmpeg      Windows: winget install ffmpeg
@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ## Run it
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...        # Windows: set ANTHROPIC_API_KEY=sk-ant-...
+export GEMINI_API_KEY=your-key-here        # Windows: set GEMINI_API_KEY=your-key-here
 export COOKIES_FROM_BROWSER=chrome         # see "Instagram login" below
 python app.py
 ```
@@ -47,13 +47,20 @@ If a link still won't load, save or screen-record the reel and use **"Upload the
 
 | Env var | Default | What it does |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Required. |
+| `GEMINI_API_KEY` | — | Required (free). |
 | `COOKIES_FROM_BROWSER` / `INSTAGRAM_COOKIES_FILE` | — | Lets it download reels as you. |
-| `CLAUDE_MODEL` | `claude-opus-5-5` | Model that reads the reel. |
-| `MAX_FRAMES` | `40` | Frames sent per reel. More = catches quick slider changes, costs more. |
-| `WHISPER_MODEL` | `base` | Voiceover transcription model (`tiny`, `base`, `small`…). |
+| `GEMINI_MODEL` | `gemini-flash-latest` | Always Google's newest free Flash model. |
+| `GEMINI_FPS` | `2` | Frames per second Gemini looks at. Higher catches quick slider changes but uses more of the free quota. |
 | `PORT` | `5000` | |
 
-Each reel costs roughly a few cents up to about 20¢, depending on its length. Your library lives in `data/looks.json`.
+### Is it really free?
+
+Yes, on Gemini's free tier. Google caps it at a number of requests per minute and per day. That's way more than you'd use checking reels, but if you hit it the app tells you to wait. One catch: on the free tier Google may use what you send to improve their models. These are public reels, so that's usually fine.
+
+Your library lives in `data/looks.json`.
+
+### Using Claude instead (paid)
+
+Set `AI_PROVIDER=claude` and `ANTHROPIC_API_KEY`, and `pip install anthropic faster-whisper`. It costs a few cents up to about 20¢ per reel. Extra options: `CLAUDE_MODEL` (default `claude-opus-5-5`), `MAX_FRAMES` (default `40`), `WHISPER_MODEL` (default `base`).
 
 > Heads-up: the app has no password and listens on your local network, so only run it on Wi-Fi you trust.

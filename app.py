@@ -81,6 +81,10 @@ def friendly_error(e: Exception) -> str:
     if "login" in text.lower() or "rate-limit" in text.lower() or "cookies" in text.lower():
         return ("Instagram wouldn't hand over the video without a login. Set COOKIES_FROM_BROWSER "
                 "(see README), or save the reel and upload the video file instead.")
+    if getattr(e, "code", None) == 429 or "RESOURCE_EXHAUSTED" in text:
+        return "Hit Gemini's free usage limit — wait a minute (or until tomorrow if it's the daily limit) and try again."
+    if "API key not valid" in text or "API_KEY_INVALID" in text:
+        return "Your GEMINI_API_KEY isn't valid — grab a fresh one at aistudio.google.com and restart the app."
     if "ANTHROPIC_API_KEY" in text or "authentication" in text.lower():
         return "No valid Anthropic API key — set ANTHROPIC_API_KEY and restart the app."
     return text or e.__class__.__name__

@@ -1,8 +1,10 @@
 """Turns an Instagram reel (or any video) into a list of photo settings.
 
-Pipeline: download the video with yt-dlp -> grab frames with ffmpeg ->
-(optionally) transcribe the voiceover with faster-whisper -> send the
-caption, transcript and frames to Claude, which returns structured settings.
+Pipeline: download the video with yt-dlp, then either
+  - Gemini (default, free tier): upload the whole video, sound included, or
+  - Claude: grab frames with ffmpeg, (optionally) transcribe the voiceover
+    with faster-whisper, and send caption + transcript + frames.
+Both return the same structured Look.
 """
 
 import base64
@@ -14,10 +16,13 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Literal
 
-import anthropic
+import time
+
 from pydantic import BaseModel, Field
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_FPS = float(os.environ.get("GEMINI_FPS", "2"))
 MAX_FRAMES = int(os.environ.get("MAX_FRAMES", "40"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 
@@ -58,14 +63,14 @@ class Look(BaseModel):
 
 SYSTEM_PROMPT = """You extract photography recipes from short-form tutorial videos (Instagram reels, TikToks).
 
-You get the post caption, an automatic transcript of the voiceover (may contain mistakes), and frames sampled in order from the video with timestamps. Tutorials usually show values on screen: slider positions in Lightroom/VSCO/Snapseed/iPhone Photos, camera dials or settings menus, or text overlays.
+You get the post caption plus the video itself (or, if you can't receive video, an automatic transcript of the voiceover — which may contain mistakes — and frames sampled in order with timestamps). Tutorials usually show values on screen: slider positions in Lightroom/VSCO/Snapseed/iPhone Photos, camera dials or settings menus, or text overlays.
 
 Your job is to write down every concrete setting so the viewer can reproduce the look without rewatching.
 
-- Read slider values carefully from the frames. If a value changes across frames, record the final value the creator lands on.
+- Read slider values carefully from the video. If a value changes over time, record the final value the creator lands on.
 - Group settings by where they live (camera vs. each app and panel) and list them in the order they should be applied.
 - Keep values exactly as shown (signs, units, decimals). For HSL / color mixer / color grading, give one row per color and property, e.g. group 'Lightroom › Color Mixer', name 'Orange Saturation', value '-15'.
-- Mark source as 'on_screen' when read from a frame, 'voiceover' or 'caption' when stated there, and 'inferred' only when you are estimating (for example reading an unlabeled slider position) — say so in the note.
+- Mark source as 'on_screen' when read from the picture, 'voiceover' or 'caption' when stated there, and 'inferred' only when you are estimating (for example reading an unlabeled slider position) — say so in the note.
 - Never invent values that are not supported by the video. If something is unreadable or hidden behind a paid preset, put it in 'missing'.
 - If the video is not a photo/editing tutorial, set kind to 'not_a_tutorial' and leave settings empty."""
 
@@ -112,9 +117,9 @@ def probe_duration(video: Path) -> float:
     return float(json.loads(out.stdout)["format"]["duration"])
 
 
-def extract_frames(video: Path, workdir: Path, duration: float) -> list[tuple[float, Path]]:
-    """Sample up to MAX_FRAMES evenly spaced frames (at most 2 per second)."""
-    fps = min(2.0, MAX_FRAMES / max(duration, 1.0))
+def extract_frames(video: Path, workdir: Path, duration: float, max_frames: int = MAX_FRAMES) -> list[tuple[float, Path]]:
+    """Sample up to max_frames evenly spaced frames (at most 2 per second)."""
+    fps = min(2.0, max_frames / max(duration, 1.0))
     frames_dir = workdir / "frames"
     frames_dir.mkdir(exist_ok=True)
     subprocess.run(
@@ -126,7 +131,7 @@ def extract_frames(video: Path, workdir: Path, duration: float) -> list[tuple[fl
         ],
         check=True,
     )
-    frames = sorted(frames_dir.glob("f*.jpg"))[:MAX_FRAMES]
+    frames = sorted(frames_dir.glob("f*.jpg"))[:max_frames]
     return [(i / fps, f) for i, f in enumerate(frames)]
 
 
@@ -154,6 +159,60 @@ def has_audio(video: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def which_provider() -> str:
+    explicit = os.environ.get("AI_PROVIDER", "").lower()
+    if explicit in ("gemini", "claude"):
+        return explicit
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        return "gemini"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "claude"
+    raise RuntimeError("No AI key found — set GEMINI_API_KEY (free at aistudio.google.com) and restart the app.")
+
+
+def ask_gemini(caption: str, video: Path) -> Look:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client()  # reads GEMINI_API_KEY / GOOGLE_API_KEY
+    uploaded = client.files.upload(file=video)
+    try:
+        deadline = time.time() + 300
+        while uploaded.state == types.FileState.PROCESSING:
+            if time.time() > deadline:
+                raise RuntimeError("Gemini took too long to process the video — try again.")
+            time.sleep(2)
+            uploaded = client.files.get(name=uploaded.name)
+        if uploaded.state == types.FileState.FAILED:
+            raise RuntimeError("Gemini couldn't process this video.")
+
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Part(
+                    file_data=types.FileData(file_uri=uploaded.uri, mime_type=uploaded.mime_type),
+                    # More frames per second than the default 1 so quick slider changes aren't missed.
+                    video_metadata=types.VideoMetadata(fps=GEMINI_FPS),
+                ),
+                types.Part(text=f"<caption>\n{caption or '(no caption)'}\n</caption>\n\n"
+                                "Extract every setting from this tutorial. Listen to the voiceover too."),
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_json_schema=Look.model_json_schema(),
+            ),
+        )
+        if not response.text:
+            raise RuntimeError("Gemini returned an empty answer (it may have blocked the video) — try again.")
+        return Look.model_validate_json(response.text)
+    finally:
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass  # uploads expire on their own after 48h
+
+
 def ask_claude(caption: str, transcript: str | None, frames: list[tuple[float, Path]]) -> Look:
     content: list[dict] = [
         {
@@ -175,9 +234,11 @@ def ask_claude(caption: str, transcript: str | None, frames: list[tuple[float, P
         })
     content.append({"type": "text", "text": "Extract every setting from this tutorial."})
 
+    import anthropic
+
     client = anthropic.Anthropic()
     response = client.beta.messages.parse(
-        model=MODEL,
+        model=CLAUDE_MODEL,
         max_tokens=16000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
@@ -217,21 +278,26 @@ def analyze(
             video = video_path
 
         duration = probe_duration(video)
-        progress("Grabbing frames…")
-        frames = extract_frames(video, workdir, duration)
-        if not frames:
-            raise RuntimeError("Couldn't read any frames from the video.")
-
+        provider = which_provider()
         transcript = None
-        if has_audio(video):
-            progress("Listening to the voiceover…")
-            transcript = transcribe(video)
 
-        progress(f"Reading settings from {len(frames)} frames…")
-        look = ask_claude(caption, transcript, frames)
+        if provider == "gemini":
+            progress("Gemini is watching the reel…")
+            look = ask_gemini(caption, video)
+            thumb_frames = extract_frames(video, workdir, duration, max_frames=3)
+        else:
+            progress("Grabbing frames…")
+            thumb_frames = frames = extract_frames(video, workdir, duration)
+            if not frames:
+                raise RuntimeError("Couldn't read any frames from the video.")
+            if has_audio(video):
+                progress("Listening to the voiceover…")
+                transcript = transcribe(video)
+            progress(f"Reading settings from {len(frames)} frames…")
+            look = ask_claude(caption, transcript, frames)
 
-        if thumb_out:
-            shutil.copy(frames[min(len(frames) - 1, len(frames) // 3)][1], thumb_out)
+        if thumb_out and thumb_frames:
+            shutil.copy(thumb_frames[len(thumb_frames) // 3][1], thumb_out)
 
         return {
             **look.model_dump(),

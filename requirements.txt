@@ -1,5 +1,7 @@
-anthropic>=1.11.0
+google-genai>=2.26.0
 flask>=3.0
 yt-dlp>=2026.8.19
-# Optional but recommended: transcribes the voiceover so spoken settings get picked up.
-faster-whisper>=1.2.1
+
+# Only needed if you switch to Claude (AI_PROVIDER=claude):
+# anthropic>=1.11.0
+# faster-whisper>=1.2.1
