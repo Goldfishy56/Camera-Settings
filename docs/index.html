@@ -385,6 +385,7 @@ How to work:
 2. Include every slider that is touched, even briefly or quickly, and even if it is set back to 0. Small changes count (e.g. Texture -5).
 3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
 4. Read numbers carefully from the screen. If a value changes several times, give the value it ends on.
+5. The very first frame and the last frame often show a text card or overlay listing settings, sometimes for only an instant. Always read them, and include everything on them (time 0 for the opening card).
 
 Rules:
 - time: seconds into the video where that final value is shown or said.
@@ -397,7 +398,7 @@ Rules:
 const RECHECK = (found) => `A first pass over this same tutorial found these settings (time in seconds, panel, setting, value):
 ${found.map((s) => `${s.time ?? "?"}s | ${s.group} | ${s.name} | ${s.value}`).join("\n") || "(none)"}
 
-Watch the whole video again from start to finish, closely, and look for anything this list is missing: sliders that were touched quickly, every color in HSL / color mixer, color grading wheels, curves, effects, detail, masks, crop, presets, camera settings, and values only said out loud. Also check every value above against the screen.
+Watch the whole video again from start to finish, closely, starting with the very first frame and the opening stills (title cards and text overlays there are easy to miss) and ending with the last frame, and look for anything this list is missing: sliders that were touched quickly, every color in HSL / color mixer, color grading wheels, curves, effects, detail, masks, crop, presets, camera settings, and values only said out loud. Also check every value above against the screen.
 
 Return in "settings" ONLY settings that are missing from the list, or whose value above is wrong (give the correct value and put "corrected" in the note). If nothing is missing, return an empty settings array. Fill the other fields as normal.`;
 const SCHEMA = {
@@ -547,6 +548,35 @@ async function thumbOf(file) {
   } catch { return ""; }
 }
 
+/* ---------- opening and closing frames ---------- */
+// Title cards and end cards often list settings but only show for a moment,
+// so they can fall between the frames Gemini samples. Grab them as stills.
+async function keyFrames(file) {
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = URL.createObjectURL(file);
+  const shots = [];
+  try {
+    await waitFor(v, "loadeddata", 10000);
+    const d = v.duration;
+    if (!isFinite(d) || d <= 0) return shots;
+    const times = [0, 0.4, 1.0, Math.max(0, d - 0.15)].filter((t, i, a) => t < d && a.indexOf(t) === i);
+    const scale = Math.min(1, 1600 / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+    for (const t of times) {
+      // Always seek (to 0.001 rather than 0): iPhone Safari can draw a blank frame otherwise.
+      const seeked = waitFor(v, "seeked", 5000);
+      v.currentTime = Math.max(t, 0.001);
+      await seeked;
+      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+      const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.92));
+      if (blob) shots.push({ t, blob, last: t === times[times.length - 1] && t > 1 });
+    }
+  } catch { /* the video alone still works */ }
+  finally { URL.revokeObjectURL(v.src); }
+  return shots;
+}
+
 /* ---------- main flow ---------- */
 let picked = [];
 $("#file").addEventListener("change", () => {
@@ -591,12 +621,16 @@ $("#go").addEventListener("click", async () => {
         const uploaded = await uploadVideo(video, ctl.signal);  // Google deletes it after 48 hours
         parts.push({ file_data: { file_uri: uploaded.uri, mime_type: uploaded.mimeType }, video_metadata: { fps: 2 } });
       }
+      for (const shot of await keyFrames(video)) {
+        parts.push({ text: shot.last ? `Still of the LAST frame (${shot.t.toFixed(1)}s):` : `Still of the video at ${shot.t.toFixed(1)}s (opening):` });
+        parts.push({ inline_data: { mime_type: "image/jpeg", data: await b64(shot.blob) } });
+      }
     } else {
       for (const img of images) parts.push({ inline_data: { mime_type: img.type, data: await b64(img) } });
     }
     const caption = $("#caption").value.trim();
     parts.push({ text: (caption ? `<caption>\n${caption}\n</caption>\n\n` : "")
-      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too." : "These are screenshots of the tutorial, in order. Extract every setting.") });
+      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too. The stills after the video are sharp copies of its very first frames and its last frame: read every bit of text on them, since a title card or end card often lists settings." : "These are screenshots of the tutorial, in order. Extract every setting.") });
 
     setStatus("Gemini is watching the reel. This takes up to a minute…", "busy");
     const first = clean(await askGemini(parts, ctl.signal));
