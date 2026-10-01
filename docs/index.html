@@ -383,9 +383,11 @@ Your list must be complete and in the same order as the video, so the viewer can
 How to work:
 1. Go through the video from start to finish, second by second. Every time a panel or tool opens, a slider moves, a value is typed, a preset or filter is picked, or a value is said or shown as text, that is a setting.
 2. Include every slider that is touched, even briefly or quickly, and even if it is set back to 0. Small changes count (e.g. Texture -5).
-3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
+3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). In Lightroom's color mixer the row of dots is always Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta, and the color being edited is the FILLED dot: name each panel by its filled dot, and treat every color's panel as separate even if its numbers look like the previous one. Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
 4. Read numbers carefully from the screen. If a value changes several times, give the value it ends on.
-5. The very first frame and the last frame often show a text card or overlay listing settings, sometimes for only an instant. Always read them, and include everything on them (time 0 for the opening card).
+5. Panels and text cards often flash by for a fraction of a second. You also get sharp stills of every screen change with their times: read every one, and list every control and value on every panel shown (all sliders visible on it, not just the one being moved). Use the still's time as the time.
+
+Before the settings, fill "screens": go through the stills one at a time and write down what each one shows and every label and number on it. Then build "settings" from your screens notes plus the voiceover and caption, so no still is skipped or mixed up with its neighbour.
 
 Rules:
 - time: seconds into the video where that final value is shown or said.
@@ -398,12 +400,18 @@ Rules:
 const RECHECK = (found) => `A first pass over this same tutorial found these settings (time in seconds, panel, setting, value):
 ${found.map((s) => `${s.time ?? "?"}s | ${s.group} | ${s.name} | ${s.value}`).join("\n") || "(none)"}
 
-Watch the whole video again from start to finish, closely, starting with the very first frame and the opening stills (title cards and text overlays there are easy to miss) and ending with the last frame, and look for anything this list is missing: sliders that were touched quickly, every color in HSL / color mixer, color grading wheels, curves, effects, detail, masks, crop, presets, camera settings, and values only said out loud. Also check every value above against the screen.
+Go through every still again one by one, from the first to the last, and look for anything this list is missing: sliders that were touched quickly, every color in HSL / color mixer, color grading wheels, curves, effects, detail, masks, crop, presets, camera settings, and values only said out loud. Also check every value above against the screen.
 
 Return in "settings" ONLY settings that are missing from the list, or whose value above is wrong (give the correct value and put "corrected" in the note). If nothing is missing, return an empty settings array. Fill the other fields as normal.`;
 const SCHEMA = {
   type: "object",
   properties: {
+    screens: { type: "array", description: "FIRST, one entry per still image, in order: what it shows and every label and number on it, read exactly.",
+      items: { type: "object", properties: {
+        time: { type: "number" },
+        shows: { type: "string", description: "Which app panel or card this is. For a color mixer, which dot is filled (that is the color being edited)." },
+        text: { type: "string", description: "Every label and value visible, e.g. 'Hue -3, Saturation +5, Luminance +4'" },
+      }, required: ["time", "shows", "text"] } },
     title: { type: "string", description: "Short catchy name for the look" },
     summary: { type: "string", description: "1-2 sentences on the look and when to use it" },
     kind: { type: "string", enum: ["camera", "editing", "camera_and_editing", "not_a_tutorial"] },
@@ -417,7 +425,7 @@ const SCHEMA = {
     steps: { type: "array", items: { type: "string" } },
     missing: { type: "array", items: { type: "string" } },
   },
-  required: ["title", "summary", "kind", "apps", "gear", "settings", "steps", "missing"],
+  required: ["screens", "title", "summary", "kind", "apps", "gear", "settings", "steps", "missing"],
 };
 
 class GeminiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
@@ -476,7 +484,7 @@ let detailed = true;  // switched off for good if the model rejects high-detail 
 function requestBody(parts) {
   const config = { response_mime_type: "application/json", response_json_schema: SCHEMA };
   if (detailed) config.media_resolution = "MEDIA_RESOLUTION_HIGH";
-  const fps = detailed ? 3 : 2;
+  const fps = 2;
   return JSON.stringify({
     system_instruction: { parts: [{ text: SYSTEM }] },
     contents: [{ role: "user", parts: parts.map((p) => (p.video_metadata ? { ...p, video_metadata: { fps } } : p)) }],
@@ -548,33 +556,74 @@ async function thumbOf(file) {
   } catch { return ""; }
 }
 
-/* ---------- opening and closing frames ---------- */
-// Title cards and end cards often list settings but only show for a moment,
-// so they can fall between the frames Gemini samples. Grab them as stills.
-async function keyFrames(file) {
+/* ---------- stills of every screen change ---------- */
+// Tutorials often flash each settings panel for a fraction of a second, which falls
+// between the frames Gemini samples and is too small to read. So scan the video on the
+// phone ~10 times a second, find each moment the screen changes, and send a sharp
+// full-size still of each one.
+const MAX_STILLS = 60;
+async function scanStills(file, onProgress) {
   const v = document.createElement("video");
   v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = URL.createObjectURL(file);
-  const shots = [];
+  const seekTo = async (t) => {
+    const done = waitFor(v, "seeked", 5000);
+    v.currentTime = Math.max(t, 0.001);  // never exactly 0: iPhone Safari can draw a blank frame
+    await done;
+  };
   try {
     await waitFor(v, "loadeddata", 10000);
     const d = v.duration;
-    if (!isFinite(d) || d <= 0) return shots;
-    const times = [0, 0.4, 1.0, Math.max(0, d - 0.15)].filter((t, i, a) => t < d && a.indexOf(t) === i);
-    const scale = Math.min(1, 1600 / Math.max(v.videoWidth, v.videoHeight));
+    if (!isFinite(d) || d <= 0) return [];
+
+    // 1. Tiny greyscale samples to spot changes.
+    const sw = 48, sh = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
+    const small = document.createElement("canvas"); small.width = sw; small.height = sh;
+    const sctx = small.getContext("2d", { willReadFrequently: true });
+    const step = Math.max(0.1, d / 400);
+    const samples = [];
+    for (let t = 0; t < d; t += step) {
+      await seekTo(t);
+      sctx.drawImage(v, 0, 0, sw, sh);
+      const px = sctx.getImageData(0, 0, sw, sh).data, g = new Uint8Array(sw * sh);
+      for (let i = 0; i < g.length; i++) g[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
+      samples.push({ t, g });
+      onProgress?.(t / d);
+    }
+    const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+
+    // 2. Keep a sample whenever it differs enough from the last one kept.
+    const select = (th) => {
+      const kept = [0];
+      for (let i = 1; i < samples.length; i++) if (diff(samples[i].g, samples[kept[kept.length - 1]].g) > th) kept.push(i);
+      return kept;
+    };
+    let th = 7, kept = select(th);
+    while (kept.length > MAX_STILLS - 1) { th *= 1.25; kept = select(th); }
+
+    // 3. Panels fade in, so within each change take the steadiest of the next few samples.
+    const times = kept.map((k, n) => {
+      const end = Math.min(k + 3, (kept[n + 1] ?? samples.length) - 1, samples.length - 2);
+      let best = k, bestD = Infinity;
+      for (let j = k; j <= end; j++) { const dj = diff(samples[j].g, samples[j + 1].g); if (dj < bestD) { bestD = dj; best = j; } }
+      return samples[best].t;
+    });
+    const last = Math.max(0, d - 0.1);
+    if (last - times[times.length - 1] > 0.3) times.push(last);
+
+    // 4. Sharp full-size stills at those moments.
+    const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
     const c = document.createElement("canvas");
     c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+    const stills = [];
     for (const t of times) {
-      // Always seek (to 0.001 rather than 0): iPhone Safari can draw a blank frame otherwise.
-      const seeked = waitFor(v, "seeked", 5000);
-      v.currentTime = Math.max(t, 0.001);
-      await seeked;
+      await seekTo(t);
       c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-      const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.92));
-      if (blob) shots.push({ t, blob, last: t === times[times.length - 1] && t > 1 });
+      const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
+      if (blob) stills.push({ t, blob });
     }
-  } catch { /* the video alone still works */ }
+    return stills;
+  } catch { return []; }  // the video alone still works
   finally { URL.revokeObjectURL(v.src); }
-  return shots;
 }
 
 /* ---------- main flow ---------- */
@@ -611,7 +660,7 @@ $("#go").addEventListener("click", async () => {
   ctl = new AbortController();
   $("#go").disabled = true; $("#stop").hidden = false;
   try {
-    const parts = [];
+    const parts = [], stillParts = [];
     if (video) {
       if (video.size <= INLINE_LIMIT) {
         setStatus("Getting the video ready…", "busy");
@@ -621,23 +670,30 @@ $("#go").addEventListener("click", async () => {
         const uploaded = await uploadVideo(video, ctl.signal);  // Google deletes it after 48 hours
         parts.push({ file_data: { file_uri: uploaded.uri, mime_type: uploaded.mimeType }, video_metadata: { fps: 2 } });
       }
-      for (const shot of await keyFrames(video)) {
-        parts.push({ text: shot.last ? `Still of the LAST frame (${shot.t.toFixed(1)}s):` : `Still of the video at ${shot.t.toFixed(1)}s (opening):` });
-        parts.push({ inline_data: { mime_type: "image/jpeg", data: await b64(shot.blob) } });
+      setStatus("Scanning the video for settings screens…", "busy");
+      const shots = await scanStills(video, (f) => setStatus(`Scanning the video for settings screens… ${Math.round(f * 100)}%`, "busy"));
+      if (shots.length) {
+        stillParts.push({ text: `Sharp stills of every moment the screen changes, in order (${shots.length} total). Settings panels may flash by for only a fraction of a second, so read every number on every still:` });
+        for (const shot of shots) {
+          stillParts.push({ text: `At ${shot.t.toFixed(1)}s:` });
+          stillParts.push({ inline_data: { mime_type: "image/jpeg", data: await b64(shot.blob) } });
+        }
+        parts.push(...stillParts);
       }
     } else {
       for (const img of images) parts.push({ inline_data: { mime_type: img.type, data: await b64(img) } });
     }
     const caption = $("#caption").value.trim();
     parts.push({ text: (caption ? `<caption>\n${caption}\n</caption>\n\n` : "")
-      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too. The stills after the video are sharp copies of its very first frames and its last frame: read every bit of text on them, since a title card or end card often lists settings." : "These are screenshots of the tutorial, in order. Extract every setting.") });
+      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too. Use the sharp stills to read the exact numbers: go through them one by one, and list every value on every settings panel they show." : "These are screenshots of the tutorial, in order. Extract every setting.") });
 
     setStatus("Gemini is watching the reel. This takes up to a minute…", "busy");
     const first = clean(await askGemini(parts, ctl.signal));
     if (first.kind !== "not_a_tutorial") {
       setStatus("Watching again for anything it missed…", "busy");
       try {
-        const second = await askGemini([...parts, { text: RECHECK(first.settings) }], ctl.signal);
+        const recheckParts = stillParts.length ? stillParts : parts;
+        const second = await askGemini([...recheckParts, { text: RECHECK(first.settings) }], ctl.signal);
         first.settings = mergeSettings(first.settings, second?.settings);
         for (const k of ["apps", "gear", "steps", "missing"]) {
           for (const x of clean(second)[k]) if (!first[k].includes(x)) first[k].push(x);
