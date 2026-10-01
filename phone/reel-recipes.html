@@ -1,0 +1,487 @@
+<title>Reel Recipes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+  /* Layout: one phone-width column — a "load a reel" panel on top, the saved-looks
+     contact sheet below, and each look opening as a sheet that reads like a camera readout. */
+  :root {
+    --bg: #eef0f3;
+    --surface: #ffffff;
+    --ink: #15171c;
+    --muted: #5d6370;
+    --line: #dde0e6;
+    --chip: #e6e9ee;
+    --accent: #e8590c;      /* film-box orange */
+    --accent-ink: #ffffff;
+    --readout: #1b1e25;     /* value cells, like a camera LCD */
+    --readout-ink: #ffd8a8;
+    --warn: #a65d00;
+    --scrim: rgba(10, 12, 16, .55);
+    --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1115; --surface: #181b21; --ink: #f1f2f4; --muted: #9aa1ad; --line: #2a2e37;
+      --chip: #23272f; --accent: #ff7a33; --accent-ink: #14100c; --readout: #0b0c0f;
+      --readout-ink: #ffc078; --warn: #f5b041; --scrim: rgba(0, 0, 0, .65); color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --surface: #181b21; --ink: #f1f2f4; --muted: #9aa1ad; --line: #2a2e37;
+    --chip: #23272f; --accent: #ff7a33; --accent-ink: #14100c; --readout: #0b0c0f;
+    --readout-ink: #ffc078; --warn: #f5b041; --scrim: rgba(0, 0, 0, .65); color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.45 var(--font-body); }
+  .wrap { max-width: 640px; margin: 0 auto; padding-inline: 16px; padding-block: 18px 48px; display: grid; gap: 22px; }
+
+  header h1 { font: 800 30px/1.05 var(--font-display); letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  header p { margin: 6px 0 0; color: var(--muted); max-width: 46ch; }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+  .pick { display: grid; place-items: center; gap: 4px; text-align: center; border: 2px dashed var(--line);
+    border-radius: 12px; padding: 20px 12px; cursor: pointer; }
+  .pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pick b { font: 600 18px var(--font-display); }
+  .pick span { color: var(--muted); font-size: 14px; }
+  .pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  label.field { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+  input[type=url], input[type=search], textarea {
+    font: 16px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; width: 100%; min-width: 0; }
+  textarea { min-height: 64px; resize: vertical; }
+  details.more summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  details.more[open] { display: grid; gap: 10px; }
+  details.more[open] summary { margin-bottom: 2px; }
+
+  button { font: 600 16px var(--font-body); border: 0; border-radius: 10px; padding: 12px 16px; cursor: pointer;
+    background: var(--chip); color: var(--ink); }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a.btn { font: 600 16px var(--font-body); border-radius: 10px; padding: 12px 16px; background: var(--chip); color: var(--ink); text-decoration: none; }
+  button.primary { background: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .row > .grow { flex: 1 1 160px; }
+
+  .status { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+  .status.error { color: var(--accent); }
+  .spin { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent);
+    animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+  .strip { display: flex; gap: 4px; overflow-x: auto; }
+  .strip img { height: 64px; border-radius: 4px; flex: none; }
+
+  .libhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .libhead h2 { font: 800 20px var(--font-display); margin: 0; }
+  .libhead input { max-width: 200px; padding: 8px 10px; font-size: 15px; }
+  .note { color: var(--muted); font-size: 13px; margin: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .tile { display: grid; grid-template-rows: auto 1fr; padding: 0; text-align: left; overflow: hidden; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--line); font-weight: 400; }
+  .tile .ph, .tile img { width: 100%; max-width: 100%; aspect-ratio: 4 / 5; object-fit: cover; display: block; background: var(--chip); }
+  .tile .meta { padding: 8px 10px 10px; display: grid; gap: 2px; min-width: 0; }
+  .tile b { font-size: 14px; line-height: 1.25; }
+  .tile small { color: var(--muted); font-size: 12px; }
+  .tag { justify-self: start; font: 700 10px var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+    background: var(--accent); color: var(--accent-ink); border-radius: 4px; padding: 1px 5px; }
+
+  /* look sheet */
+  .sheet { position: fixed; inset: 0; background: var(--scrim); display: grid; align-items: end; justify-items: center; z-index: 10;
+    padding-top: calc(24px + env(safe-area-inset-top, 0px)); }
+  .card { background: var(--surface); width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; border-radius: 18px 18px 0 0;
+    padding: 18px 16px calc(24px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 14px; }
+  .card .top { display: flex; gap: 10px; align-items: start; justify-content: space-between; }
+  .card h3 { font: 800 24px/1.1 var(--font-display); margin: 0; text-wrap: balance; min-width: 0; }
+  .card p { margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--chip); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+  .group h4, .card h4 { margin: 0 0 6px; font: 700 12px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .rows { display: grid; gap: 1px; background: var(--line); border-radius: 10px; overflow: hidden; }
+  .set { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; background: var(--surface); padding: 8px 10px; }
+  .set .name { min-width: 0; }
+  .set .name small { display: block; color: var(--muted); font-size: 13px; }
+  .src { font: 600 10px var(--font-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; margin-left: 6px; white-space: nowrap; }
+  .src.estimated { color: var(--warn); border-color: var(--warn); }
+  .val { font: 700 16px var(--font-mono); font-variant-numeric: tabular-nums; background: var(--readout); color: var(--readout-ink);
+    border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
+  ul { margin: 0; padding-left: 20px; }
+  .confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Reel Recipes</h1>
+    <p>Save a photo-tutorial reel, drop it in here, and get every camera setting and editing slider written down.</p>
+  </header>
+
+  <section class="panel" aria-labelledby="load-title">
+    <h2 id="load-title" hidden>Load a reel</h2>
+    <label class="pick" for="file">
+      <b id="pickTitle">Choose the reel video</b>
+      <span id="pickSub">From Photos or Files. Screenshots work too.</span>
+      <input type="file" id="file" accept="video/*,image/*" multiple>
+    </label>
+    <details class="more">
+      <summary>Add the link, caption or what they said (optional)</summary>
+      <label class="field">Reel link
+        <input type="url" id="link" placeholder="https://www.instagram.com/reel/…" autocomplete="off">
+      </label>
+      <label class="field">Caption
+        <textarea id="caption" placeholder="Paste the caption if it lists settings"></textarea>
+      </label>
+      <label class="field">Anything they said out loud
+        <textarea id="said" placeholder="e.g. “drop the highlights to minus 40”"></textarea>
+      </label>
+    </details>
+    <div class="row">
+      <button class="primary grow" id="go" disabled>Get settings</button>
+      <button id="stop" hidden>Stop</button>
+    </div>
+    <div class="status" id="status" hidden><span class="spin" id="spin"></span><span id="statusText"></span></div>
+    <div class="strip" id="strip" hidden></div>
+  </section>
+
+  <section aria-labelledby="lib-title" style="display:grid; gap:12px">
+    <div class="libhead">
+      <h2 id="lib-title">Saved looks</h2>
+      <input type="search" id="search" placeholder="Search looks" aria-label="Search saved looks">
+    </div>
+    <p class="note" id="storeNote" hidden></p>
+    <div class="grid" id="grid"></div>
+  </section>
+</div>
+
+<div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
+const SRC = { on_screen: "on screen", caption: "caption", voiceover: "said", inferred: "estimated" };
+
+const EXAMPLE = {
+  id: "example", example: true, title: "Warm film golden hour", author: "",
+  summary: "Soft, warm, slightly faded look for sunset portraits.", kind: "camera_and_editing",
+  apps: ["Lightroom"], gear: ["iPhone"], url: "", thumb: "",
+  settings: [
+    { group: "Camera", name: "Exposure compensation", value: "-0.7", note: "Expose for the sky", source: "voiceover" },
+    { group: "Lightroom › Light", name: "Exposure", value: "+0.35", note: "", source: "on_screen" },
+    { group: "Lightroom › Light", name: "Contrast", value: "-20", note: "", source: "on_screen" },
+    { group: "Lightroom › Light", name: "Highlights", value: "-45", note: "", source: "on_screen" },
+    { group: "Lightroom › Color Mixer", name: "Orange Saturation", value: "-15", note: "Keeps skin natural", source: "inferred" },
+  ],
+  steps: ["Shoot facing the sun, about an hour before sunset"], missing: ["Exact tone curve points (paid preset)"], notes: "",
+};
+
+let looks = [];
+let sample = null, store = null;
+let ctl = null;
+
+/* ---------- storage: the viewer's private db subtree, falling back to this device ---------- */
+const local = {
+  load() { try { return JSON.parse(localStorage.getItem("looks") || "[]"); } catch { return []; } },
+  save() { try { localStorage.setItem("looks", JSON.stringify(looks)); } catch {} },
+};
+
+async function initStore() {
+  looks = local.load();
+  render();
+  const use = (n) => (window.claude?.use ? window.claude.use(n) : Promise.resolve(null));
+  const [db, user] = await Promise.all([use("db"), use("user")]);
+  const uid = user ? await user.id() : null;
+  if (!db || !uid) { showStoreNote(); return; }
+  const col = db.doc("data/users/" + uid + "/library").collection("looks");
+  store = col;
+  col.orderBy("created", "desc").onSnapshot(
+    (snap) => { looks = snap.docs.map((d) => ({ id: d.id, ...d.data() })); render(); },
+    () => { store = null; showStoreNote(); },
+  );
+}
+function showStoreNote() {
+  $("#storeNote").hidden = false;
+  $("#storeNote").textContent = "Looks are saved on this device only.";
+}
+async function saveLook(look) {
+  if (store) {
+    try { await store.doc(look.id).set(look); return; } catch { store = null; showStoreNote(); }
+  }
+  looks = [look, ...looks.filter((l) => l.id !== look.id)];
+  local.save(); render();
+}
+async function patchLook(id, changes) {
+  const l = looks.find((x) => x.id === id); if (!l) return;
+  Object.assign(l, changes);
+  if (store) { try { await store.doc(id).update(changes); return; } catch {} }
+  local.save(); render();
+}
+async function deleteLook(id) {
+  if (store) { try { await store.doc(id).delete(); return; } catch {} }
+  looks = looks.filter((l) => l.id !== id); local.save(); render();
+}
+
+/* ---------- library ---------- */
+function render() {
+  const q = $("#search").value.trim().toLowerCase();
+  const list = looks.length ? looks : [EXAMPLE];
+  const shown = list.filter((l) => !q || [l.title, l.summary, l.author, ...(l.apps || []), l.notes].join(" ").toLowerCase().includes(q));
+  $("#grid").replaceChildren(...shown.map((l) => {
+    const b = document.createElement("button");
+    b.className = "tile"; b.dataset.id = l.id;
+    b.innerHTML = `${l.thumb ? `<img src="${esc(l.thumb)}" alt="">` : `<span class="ph"></span>`}
+      <span class="meta">${l.example ? `<span class="tag">Example</span>` : ""}
+      <b>${esc(l.title)}</b><small>${esc(KIND[l.kind] || "")}</small></span>`;
+    return b;
+  }));
+  if (!shown.length) $("#grid").innerHTML = `<p class="note">No looks match “${esc(q)}”.</p>`;
+}
+$("#grid").addEventListener("click", (e) => {
+  const t = e.target.closest(".tile"); if (!t) return;
+  openLook(t.dataset.id === "example" ? EXAMPLE : looks.find((l) => l.id === t.dataset.id));
+});
+$("#search").addEventListener("input", render);
+
+/* ---------- look sheet ---------- */
+function asText(l) {
+  const out = [l.title, l.summary, ""];
+  for (const [g, rows] of groups(l.settings)) {
+    out.push(g + ":");
+    for (const s of rows) out.push(`  ${s.name}: ${s.value}${s.note ? "  (" + s.note + ")" : ""}`);
+    out.push("");
+  }
+  if (l.steps.length) out.push("Steps:", ...l.steps.map((s) => "  • " + s), "");
+  if (l.url) out.push(l.url);
+  return out.join("\n").trim();
+}
+function groups(settings) {
+  const m = new Map();
+  for (const s of settings) { if (!m.has(s.group)) m.set(s.group, []); m.get(s.group).push(s); }
+  return m;
+}
+function openLook(l) {
+  if (!l) return;
+  const list = (items) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
+  const sets = [...groups(l.settings)].map(([g, rows]) => `<div class="group"><h4>${esc(g)}</h4><div class="rows">${rows.map((s) => `
+      <div class="set"><div class="name">${esc(s.name)}<span class="src ${s.source === "inferred" ? "estimated" : ""}">${SRC[s.source] || ""}</span>
+      ${s.note ? `<small>${esc(s.note)}</small>` : ""}</div><span class="val">${esc(s.value)}</span></div>`).join("")}</div></div>`).join("");
+  $("#card").innerHTML = `
+    <div class="top"><h3 id="lookTitle">${esc(l.title)}</h3><button id="close" aria-label="Close">✕</button></div>
+    ${l.example ? `<p class="note">This is an example of what you'll get. Choose a reel above to make your own.</p>` : ""}
+    <p>${esc(l.summary)}</p>
+    <div class="chips"><span class="chip">${esc(KIND[l.kind] || l.kind)}</span>${[...l.apps, ...l.gear].map((a) => `<span class="chip">${esc(a)}</span>`).join("")}</div>
+    ${sets || (l.kind === "not_a_tutorial" ? "" : `<p class="note">No exact values were shown in this reel.</p>`)}
+    ${l.steps.length ? `<div><h4>Steps and tips</h4>${list(l.steps)}</div>` : ""}
+    ${l.missing.length ? `<div><h4>Couldn't read</h4>${list(l.missing)}</div>` : ""}
+    ${l.example ? "" : `<label class="field">My notes<textarea id="notes" placeholder="How it worked on your photos">${esc(l.notes || "")}</textarea></label>`}
+    <div class="row">
+      <button class="primary" id="copy">Copy settings</button>
+      ${l.url ? `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open reel</a>` : ""}
+      ${l.example ? "" : `<button id="del">Delete</button>`}
+    </div>
+    <div class="confirm" id="confirm" hidden><span>Delete this look?</span><button class="primary" id="yes">Delete</button><button id="no">Keep</button></div>
+    <pre id="copyFallback" hidden style="white-space:pre-wrap;font:13px var(--font-mono);user-select:all;margin:0"></pre>`;
+  $("#sheet").hidden = false;
+  $("#card").scrollTop = 0;
+  $("#close").onclick = closeLook;
+  $("#copy").onclick = (e) => {
+    const text = asText(l);
+    navigator.clipboard.writeText(text).then(() => {
+      e.target.textContent = "Copied"; setTimeout(() => (e.target.textContent = "Copy settings"), 1500);
+    }).catch(() => { const pre = $("#copyFallback"); pre.textContent = text; pre.hidden = false; });
+  };
+  if (!l.example) {
+    $("#notes").onchange = (e) => patchLook(l.id, { notes: e.target.value });
+    $("#del").onclick = () => { $("#confirm").hidden = false; };
+    $("#no").onclick = () => { $("#confirm").hidden = true; };
+    $("#yes").onclick = () => { deleteLook(l.id); closeLook(); };
+  }
+}
+function closeLook() { $("#sheet").hidden = true; }
+$("#sheet").addEventListener("click", (e) => { if (e.target === $("#sheet")) closeLook(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLook(); });
+
+/* ---------- frames from the video ---------- */
+function waitFor(el, ev, ms = 8000) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout")), ms);
+    el.addEventListener(ev, () => { clearTimeout(t); res(); }, { once: true });
+  });
+}
+function toBlob(canvas, q) { return new Promise((r) => canvas.toBlob(r, "image/jpeg", q)); }
+
+async function videoFrames(file, count) {
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.preload = "auto";
+  v.src = URL.createObjectURL(file);
+  try {
+    await waitFor(v, "loadeddata", 15000);
+    const dur = v.duration;
+    if (!isFinite(dur) || dur <= 0) throw new Error("no duration");
+    const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+    const ctx = c.getContext("2d");
+    const frames = [];
+    for (let i = 0; i < count; i++) {
+      const t = Math.min(dur - 0.05, (dur * (i + 0.5)) / count);
+      v.currentTime = t;
+      await waitFor(v, "seeked");
+      ctx.drawImage(v, 0, 0, c.width, c.height);
+      frames.push({ t, blob: await toBlob(c, 0.85) });
+      setStatus(`Pulling frames from the video… ${i + 1}/${count}`, "busy");
+    }
+    return { frames, duration: dur };
+  } finally { URL.revokeObjectURL(v.src); }
+}
+
+async function thumbFrom(blob) {
+  const img = await createImageBitmap(blob);
+  const w = 240, h = Math.round((img.height / img.width) * w);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  c.getContext("2d").drawImage(img, 0, 0, w, h);
+  return c.toDataURL("image/jpeg", 0.7);
+}
+
+/* ---------- asking Claude ---------- */
+function buildPrompt({ caption, said, times, screenshots }) {
+  return `You extract photography recipes from short tutorial videos (Instagram reels, TikToks).
+
+The attached images are ${screenshots ? "screenshots the viewer took of the reel, in order" : `frames sampled in order from the reel, at ${times.map((t) => t.toFixed(1) + "s").join(", ")}`}. Tutorials usually show values on screen: slider positions in Lightroom, VSCO, Snapseed or iPhone Photos, camera dials and menus, or text overlays.
+
+<caption>
+${caption || "(none given)"}
+</caption>
+<what_they_said>
+${said || "(none given)"}
+</what_they_said>
+
+Write down every concrete setting so the viewer can reproduce the look without rewatching.
+- Read slider values carefully. If a value changes across frames, give the final value.
+- Group settings by where they live (camera vs. each app and panel), in the order to apply them. For color mixer / HSL / color grading, one row per color and property, e.g. group "Lightroom › Color Mixer", name "Orange Saturation".
+- Keep values exactly as shown (signs, units, decimals).
+- source: "on_screen" if read from an image, "caption" or "voiceover" if from those texts, "inferred" only when estimating (say so in the note).
+- Never invent values. Unreadable or paywalled things go in "missing".
+- If this is not a photo or editing tutorial, kind is "not_a_tutorial" and settings is empty.
+
+Reply with only this JSON object:
+{"title": "short catchy name for the look", "summary": "1-2 sentences", "kind": "camera" | "editing" | "camera_and_editing" | "not_a_tutorial", "apps": [string], "gear": [string], "settings": [{"group": string, "name": string, "value": string, "note": string, "source": "on_screen" | "caption" | "voiceover" | "inferred"}], "steps": [string], "missing": [string]}`;
+}
+
+function clean(r) {
+  const str = (x) => (typeof x === "string" ? x : x == null ? "" : String(x));
+  const arr = (x) => (Array.isArray(x) ? x.map(str).filter(Boolean) : []);
+  return {
+    title: str(r?.title) || "Untitled look",
+    summary: str(r?.summary),
+    kind: KIND[r?.kind] ? r.kind : "editing",
+    apps: arr(r?.apps), gear: arr(r?.gear), steps: arr(r?.steps), missing: arr(r?.missing),
+    settings: (Array.isArray(r?.settings) ? r.settings : []).map((s) => ({
+      group: str(s?.group) || "Settings", name: str(s?.name), value: str(s?.value),
+      note: str(s?.note), source: SRC[s?.source] ? s.source : "on_screen",
+    })).filter((s) => s.name && s.value),
+  };
+}
+
+const ERRORS = {
+  not_granted: "Claude wasn't allowed for this page. Reopen it and tap Allow when asked.",
+  sampling_disabled: "Claude isn't available for this account.",
+  rate_limited: "You've hit your Claude usage limit for now. Try again later.",
+  session_expired: "You've been signed out of Claude. Sign in again and retry.",
+  image_rejected: "Claude couldn't read those images. Try a different video or screenshots.",
+  images_unavailable: "This view can't send pictures to Claude. Open the page in the Claude app or claude.ai.",
+  refused: "Claude declined to read this video.",
+  invalid_json: "Claude's answer came back garbled. Tap Get settings to try again.",
+  prompt_too_large: "That's too much text. Shorten the caption and try again.",
+};
+
+/* ---------- main flow ---------- */
+let picked = [];
+$("#file").addEventListener("change", () => {
+  picked = [...$("#file").files];
+  const vids = picked.filter((f) => f.type.startsWith("video/"));
+  $("#pickTitle").textContent = vids.length ? vids[0].name || "Video selected"
+    : picked.length ? `${picked.length} screenshot${picked.length > 1 ? "s" : ""} selected` : "Choose the reel video";
+  $("#pickSub").textContent = picked.length ? "Tap to choose something else" : "From Photos or Files. Screenshots work too.";
+  $("#go").disabled = !picked.length || !sample;
+  setStatus(sample ? "" : "Connecting to Claude…", sample ? null : "busy");
+});
+
+function setStatus(text, kind) {
+  $("#status").hidden = !text;
+  $("#status").className = "status" + (kind === "error" ? " error" : "");
+  $("#spin").hidden = kind !== "busy";
+  $("#statusText").textContent = text || "";
+}
+
+$("#stop").addEventListener("click", () => ctl?.abort());
+
+$("#go").addEventListener("click", async () => {
+  if (!picked.length || !sample) return;
+  const limits = await sample.limits().catch(() => null);
+  if (!limits?.images) { setStatus(ERRORS.images_unavailable, "error"); return; }
+  const maxImages = Math.max(1, Math.min(limits.images.maxCount, 16));
+
+  $("#go").disabled = true; $("#strip").hidden = true;
+  let images, times = [], screenshots = false;
+  try {
+    const video = picked.find((f) => f.type.startsWith("video/"));
+    if (video) {
+      setStatus("Pulling frames from the video…", "busy");
+      const { frames } = await videoFrames(video, maxImages);
+      images = frames.map((f) => f.blob); times = frames.map((f) => f.t);
+    } else {
+      screenshots = true;
+      images = picked.filter((f) => f.type.startsWith("image/")).slice(0, maxImages);
+    }
+  } catch {
+    setStatus("Couldn't open that video here. Take a few screenshots of the reel and choose those instead.", "error");
+    $("#go").disabled = false; return;
+  }
+
+  $("#strip").replaceChildren(...images.map((b) => Object.assign(new Image(), { src: URL.createObjectURL(b), alt: "" })));
+  $("#strip").hidden = false;
+
+  ctl = new AbortController();
+  $("#stop").hidden = false;
+  setStatus("Claude is reading the settings. This takes up to a minute…", "busy");
+  try {
+    const raw = await sample.json(
+      buildPrompt({ caption: $("#caption").value.trim(), said: $("#said").value.trim(), times, screenshots }),
+      { images, signal: ctl.signal, modelTier: "default" },
+    );
+    const look = {
+      id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      ...clean(raw),
+      url: $("#link").value.trim(), notes: "", created: Date.now(),
+      thumb: await thumbFrom(images[Math.floor(images.length / 3)]).catch(() => ""),
+    };
+    await saveLook(look);
+    setStatus("");
+    $("#strip").hidden = true;
+    for (const id of ["link", "caption", "said"]) $("#" + id).value = "";
+    openLook(look);
+  } catch (e) {
+    if (e?.code === "cancelled") setStatus("");
+    else setStatus(ERRORS[e?.code] || "Something went wrong reaching Claude. Tap Get settings to try again.", "error");
+  } finally {
+    $("#stop").hidden = true;
+    $("#go").disabled = !picked.length;
+  }
+});
+
+/* ---------- start ---------- */
+initStore();
+(window.claude?.use ? window.claude.use("sample") : Promise.resolve(null)).then((s) => {
+  sample = s;
+  if (!s) {
+    $("#go").disabled = true;
+    setStatus("Open this page in the Claude app or on claude.ai to read reels.", "error");
+  } else {
+    $("#go").disabled = !picked.length;
+    if ($("#statusText").textContent === "Connecting to Claude…") setStatus("");
+  }
+});
+</script>

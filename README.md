@@ -64,3 +64,13 @@ Your library lives in `data/looks.json`.
 Set `AI_PROVIDER=claude` and `ANTHROPIC_API_KEY`, and `pip install anthropic faster-whisper`. It costs a few cents up to about 20¢ per reel. Extra options: `CLAUDE_MODEL` (default `claude-opus-5-5`), `MAX_FRAMES` (default `40`), `WHISPER_MODEL` (default `base`).
 
 > Heads-up: the app has no password and listens on your local network, so only run it on Wi-Fi you trust.
+
+## iPhone version (no computer, free)
+
+`phone/reel-recipes.html` is a single page published as a claude.ai Artifact. It runs on your free Claude account: no API key, no server.
+
+1. In Instagram, save the reel (**⋯ → Download**, or screen-record it).
+2. Open the Reel Recipes link and choose the video (or a few screenshots).
+3. The page pulls frames from the video and Claude reads the settings. Looks are saved to your Claude account.
+
+It can't hear the voiceover, so type anything they say out loud into the optional "what they said" box.
