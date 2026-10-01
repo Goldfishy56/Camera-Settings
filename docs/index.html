@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Reel Recipes">
+<meta name="theme-color" content="#0f1115">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<title>Reel Recipes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+  /* Layout: one phone-width column — a "load a reel" panel on top, the saved-looks
+     contact sheet below, and each look opening as a sheet that reads like a camera readout. */
+  :root {
+    --bg: #eef0f3;
+    --surface: #ffffff;
+    --ink: #15171c;
+    --muted: #5d6370;
+    --line: #dde0e6;
+    --chip: #e6e9ee;
+    --accent: #e8590c;      /* film-box orange */
+    --accent-ink: #ffffff;
+    --readout: #1b1e25;     /* value cells, like a camera LCD */
+    --readout-ink: #ffd8a8;
+    --warn: #a65d00;
+    --scrim: rgba(10, 12, 16, .55);
+    --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1115; --surface: #181b21; --ink: #f1f2f4; --muted: #9aa1ad; --line: #2a2e37;
+      --chip: #23272f; --accent: #ff7a33; --accent-ink: #14100c; --readout: #0b0c0f;
+      --readout-ink: #ffc078; --warn: #f5b041; --scrim: rgba(0, 0, 0, .65); color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --surface: #181b21; --ink: #f1f2f4; --muted: #9aa1ad; --line: #2a2e37;
+    --chip: #23272f; --accent: #ff7a33; --accent-ink: #14100c; --readout: #0b0c0f;
+    --readout-ink: #ffc078; --warn: #f5b041; --scrim: rgba(0, 0, 0, .65); color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .keycard a { color: var(--accent); }
+  .keycard ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  .linkbtn { background: none; padding: 0; color: var(--muted); font-weight: 500; text-decoration: underline; font-size: 14px; justify-self: start; }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.45 var(--font-body); }
+  .wrap { max-width: 640px; margin: 0 auto; padding-inline: 16px; padding-block: 18px 48px; display: grid; gap: 22px; }
+
+  header h1 { font: 800 30px/1.05 var(--font-display); letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  header p { margin: 6px 0 0; color: var(--muted); max-width: 46ch; }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+  .howto { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 15px; }
+  label.field small { color: var(--muted); font-size: 13px; }
+  .pick { display: grid; place-items: center; gap: 4px; text-align: center; border: 2px dashed var(--line);
+    border-radius: 12px; padding: 20px 12px; cursor: pointer; }
+  .pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pick b { font: 600 18px var(--font-display); }
+  .pick span { color: var(--muted); font-size: 14px; }
+  .pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  label.field { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+  input[type=url], input[type=text], input[type=search], textarea {
+    font: 16px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; width: 100%; min-width: 0; }
+  textarea { min-height: 64px; resize: vertical; }
+  details.more summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  details.more[open] { display: grid; gap: 10px; }
+  details.more[open] summary { margin-bottom: 2px; }
+
+  button { font: 600 16px var(--font-body); border: 0; border-radius: 10px; padding: 12px 16px; cursor: pointer;
+    background: var(--chip); color: var(--ink); }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a.btn { font: 600 16px var(--font-body); border-radius: 10px; padding: 12px 16px; background: var(--chip); color: var(--ink); text-decoration: none; }
+  button.primary { background: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .row > .grow { flex: 1 1 160px; }
+
+  .status { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+  .status.error { color: var(--accent); }
+  .spin { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent);
+    animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+  .strip { display: flex; gap: 4px; overflow-x: auto; }
+  .strip img { height: 64px; border-radius: 4px; flex: none; }
+
+  .libhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .libhead h2 { font: 800 20px var(--font-display); margin: 0; }
+  .libhead input { max-width: 200px; padding: 8px 10px; font-size: 15px; }
+  .note { color: var(--muted); font-size: 13px; margin: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .tile { display: grid; grid-template-rows: auto 1fr; padding: 0; text-align: left; overflow: hidden; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--line); font-weight: 400; }
+  .tile .ph, .tile img { width: 100%; max-width: 100%; aspect-ratio: 4 / 5; object-fit: cover; display: block; background: var(--chip); }
+  .tile .meta { padding: 8px 10px 10px; display: grid; gap: 2px; min-width: 0; }
+  .tile b { font-size: 14px; line-height: 1.25; }
+  .tile small { color: var(--muted); font-size: 12px; }
+  .tag { justify-self: start; font: 700 10px var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+    background: var(--accent); color: var(--accent-ink); border-radius: 4px; padding: 1px 5px; }
+
+  /* look sheet */
+  .sheet { position: fixed; inset: 0; background: var(--scrim); display: grid; align-items: end; justify-items: center; z-index: 10;
+    padding-top: calc(24px + env(safe-area-inset-top, 0px)); }
+  .card { background: var(--surface); width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; border-radius: 18px 18px 0 0;
+    padding: 18px 16px calc(24px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 14px; }
+  .card .top { display: flex; gap: 10px; align-items: start; justify-content: space-between; }
+  .card h3 { font: 800 24px/1.1 var(--font-display); margin: 0; text-wrap: balance; min-width: 0; }
+  .card p { margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--chip); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+  .group h4, .card h4 { margin: 0 0 6px; font: 700 12px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .rows { display: grid; gap: 1px; background: var(--line); border-radius: 10px; overflow: hidden; }
+  .set { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; background: var(--surface); padding: 8px 10px; }
+  .set .name { min-width: 0; }
+  .set .name small { display: block; color: var(--muted); font-size: 13px; }
+  .src { font: 600 10px var(--font-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; margin-left: 6px; white-space: nowrap; }
+  .src.estimated { color: var(--warn); border-color: var(--warn); }
+  .val { font: 700 16px var(--font-mono); font-variant-numeric: tabular-nums; background: var(--readout); color: var(--readout-ink);
+    border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
+  ul { margin: 0; padding-left: 20px; }
+  .confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Reel Recipes</h1>
+    <p>Save a photo-tutorial reel, drop it in here, and get every camera setting and editing slider written down.</p>
+  </header>
+
+  <section class="panel keycard" id="keycard" hidden aria-labelledby="key-title">
+    <h2 id="key-title" style="margin:0;font:800 20px var(--font-display)">One-time setup</h2>
+    <ol>
+      <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li>
+      <li>Tap <b>Create API key</b> and copy it. It's free, no card needed.</li>
+      <li>Paste it here. It stays on this phone only.</li>
+    </ol>
+    <label class="field">Gemini API key
+      <input type="text" id="key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your key">
+    </label>
+    <div class="row"><button class="primary grow" id="saveKey">Save key</button><button id="cancelKey" hidden>Cancel</button></div>
+  </section>
+
+  <section class="panel" id="loader" aria-labelledby="load-title">
+    <h2 id="load-title" hidden>Load a reel</h2>
+    <ol class="howto">
+      <li>In Instagram, tap <b>⋯</b> on the reel → <b>Download</b> (or screen-record it).</li>
+      <li>Choose that video below and tap <b>Get settings</b>.</li>
+    </ol>
+    <label class="pick" for="file">
+      <b id="pickTitle">Choose the reel video</b>
+      <span id="pickSub">From Photos or Files. Screenshots work too.</span>
+      <input type="file" id="file" accept="video/*,image/*" multiple>
+    </label>
+    <details class="more">
+      <summary>Add the link or caption (optional)</summary>
+      <label class="field">Reel link
+        <input type="url" id="link" placeholder="https://www.instagram.com/reel/…" autocomplete="off">
+        <small id="linkHint" hidden>Saved with the look so you can find the reel again. Instagram won't let apps download from a link, so choose the saved video above too.</small>
+      </label>
+      <label class="field">Caption
+        <textarea id="caption" placeholder="Paste the caption if it lists settings"></textarea>
+      </label>
+    </details>
+    <div class="row">
+      <button class="primary grow" id="go">Get settings</button>
+      <button id="stop" hidden>Stop</button>
+    </div>
+    <div class="status" id="status" hidden><span class="spin" id="spin"></span><span id="statusText"></span></div>
+    <button class="linkbtn" id="changeKey">Change Gemini key</button>
+  </section>
+
+  <section aria-labelledby="lib-title" style="display:grid; gap:12px">
+    <div class="libhead">
+      <h2 id="lib-title">Saved looks</h2>
+      <input type="search" id="search" placeholder="Search looks" aria-label="Search saved looks">
+    </div>
+    <p class="note">Saved on this phone. Add this page to your Home Screen so they stick around.</p>
+    <div class="grid" id="grid"></div>
+  </section>
+</div>
+
+<div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
+
+<script>
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
+const SRC = { on_screen: "on screen", caption: "caption", voiceover: "said", inferred: "estimated" };
+
+const EXAMPLE = {
+  id: "example", example: true, title: "Warm film golden hour", author: "",
+  summary: "Soft, warm, slightly faded look for sunset portraits.", kind: "camera_and_editing",
+  apps: ["Lightroom"], gear: ["iPhone"], url: "", thumb: "",
+  settings: [
+    { group: "Camera", name: "Exposure compensation", value: "-0.7", note: "Expose for the sky", source: "voiceover" },
+    { group: "Lightroom › Light", name: "Exposure", value: "+0.35", note: "", source: "on_screen" },
+    { group: "Lightroom › Light", name: "Contrast", value: "-20", note: "", source: "on_screen" },
+    { group: "Lightroom › Light", name: "Highlights", value: "-45", note: "", source: "on_screen" },
+    { group: "Lightroom › Color Mixer", name: "Orange Saturation", value: "-15", note: "Keeps skin natural", source: "inferred" },
+  ],
+  steps: ["Shoot facing the sun, about an hour before sunset"], missing: ["Exact tone curve points (paid preset)"], notes: "",
+};
+
+let looks = [];
+let ctl = null;
+
+
+/* ---------- storage: this phone only ---------- */
+function loadLooks() { try { return JSON.parse(localStorage.getItem("looks") || "[]"); } catch { return []; } }
+function persist() {
+  try { localStorage.setItem("looks", JSON.stringify(looks)); }
+  catch { setStatus("Your phone's storage for this page is full. Delete a few old looks.", "error"); }
+}
+async function saveLook(look) { looks = [look, ...looks.filter((l) => l.id !== look.id)]; persist(); render(); }
+async function patchLook(id, changes) {
+  const l = looks.find((x) => x.id === id); if (!l) return;
+  Object.assign(l, changes); persist(); render();
+}
+async function deleteLook(id) { looks = looks.filter((l) => l.id !== id); persist(); render(); }
+
+/* ---------- Gemini key ---------- */
+const getKey = () => { try { return localStorage.getItem("geminiKey") || ""; } catch { return ""; } };
+function showKeyCard(show) {
+  $("#keycard").hidden = !show;
+  $("#loader").hidden = show;
+  $("#cancelKey").hidden = !getKey();
+  if (show) $("#key").value = getKey();
+}
+$("#saveKey").addEventListener("click", () => {
+  const k = $("#key").value.trim();
+  if (k.length < 20) { $("#key").focus(); return; }
+  try { localStorage.setItem("geminiKey", k); } catch {}
+  showKeyCard(false);
+});
+$("#cancelKey").addEventListener("click", () => showKeyCard(false));
+$("#changeKey").addEventListener("click", () => showKeyCard(true));
+
+/* ---------- library ---------- */
+function render() {
+  const q = $("#search").value.trim().toLowerCase();
+  const list = looks.length ? looks : [EXAMPLE];
+  const shown = list.filter((l) => !q || [l.title, l.summary, l.author, ...(l.apps || []), l.notes].join(" ").toLowerCase().includes(q));
+  $("#grid").replaceChildren(...shown.map((l) => {
+    const b = document.createElement("button");
+    b.className = "tile"; b.dataset.id = l.id;
+    b.innerHTML = `${l.thumb ? `<img src="${esc(l.thumb)}" alt="">` : `<span class="ph"></span>`}
+      <span class="meta">${l.example ? `<span class="tag">Example</span>` : ""}
+      <b>${esc(l.title)}</b><small>${esc(KIND[l.kind] || "")}</small></span>`;
+    return b;
+  }));
+  if (!shown.length) $("#grid").innerHTML = `<p class="note">No looks match “${esc(q)}”.</p>`;
+}
+$("#grid").addEventListener("click", (e) => {
+  const t = e.target.closest(".tile"); if (!t) return;
+  openLook(t.dataset.id === "example" ? EXAMPLE : looks.find((l) => l.id === t.dataset.id));
+});
+$("#search").addEventListener("input", render);
+
+/* ---------- look sheet ---------- */
+function asText(l) {
+  const out = [l.title, l.summary, ""];
+  for (const [g, rows] of groups(l.settings)) {
+    out.push(g + ":");
+    for (const s of rows) out.push(`  ${s.name}: ${s.value}${s.note ? "  (" + s.note + ")" : ""}`);
+    out.push("");
+  }
+  if (l.steps.length) out.push("Steps:", ...l.steps.map((s) => "  • " + s), "");
+  if (l.url) out.push(l.url);
+  return out.join("\n").trim();
+}
+function groups(settings) {
+  const m = new Map();
+  for (const s of settings) { if (!m.has(s.group)) m.set(s.group, []); m.get(s.group).push(s); }
+  return m;
+}
+function openLook(l) {
+  if (!l) return;
+  const list = (items) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
+  const sets = [...groups(l.settings)].map(([g, rows]) => `<div class="group"><h4>${esc(g)}</h4><div class="rows">${rows.map((s) => `
+      <div class="set"><div class="name">${esc(s.name)}<span class="src ${s.source === "inferred" ? "estimated" : ""}">${SRC[s.source] || ""}</span>
+      ${s.note ? `<small>${esc(s.note)}</small>` : ""}</div><span class="val">${esc(s.value)}</span></div>`).join("")}</div></div>`).join("");
+  $("#card").innerHTML = `
+    <div class="top"><h3 id="lookTitle">${esc(l.title)}</h3><button id="close" aria-label="Close">✕</button></div>
+    ${l.example ? `<p class="note">This is an example of what you'll get. Choose a reel above to make your own.</p>` : ""}
+    <p>${esc(l.summary)}</p>
+    <div class="chips"><span class="chip">${esc(KIND[l.kind] || l.kind)}</span>${[...l.apps, ...l.gear].map((a) => `<span class="chip">${esc(a)}</span>`).join("")}</div>
+    ${sets || (l.kind === "not_a_tutorial" ? "" : `<p class="note">No exact values were shown in this reel.</p>`)}
+    ${l.steps.length ? `<div><h4>Steps and tips</h4>${list(l.steps)}</div>` : ""}
+    ${l.missing.length ? `<div><h4>Couldn't read</h4>${list(l.missing)}</div>` : ""}
+    ${l.example ? "" : `<label class="field">My notes<textarea id="notes" placeholder="How it worked on your photos">${esc(l.notes || "")}</textarea></label>`}
+    <div class="row">
+      <button class="primary" id="copy">Copy settings</button>
+      ${l.url ? `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open reel</a>` : ""}
+      ${l.example ? "" : `<button id="del">Delete</button>`}
+    </div>
+    <div class="confirm" id="confirm" hidden><span>Delete this look?</span><button class="primary" id="yes">Delete</button><button id="no">Keep</button></div>
+    <pre id="copyFallback" hidden style="white-space:pre-wrap;font:13px var(--font-mono);user-select:all;margin:0"></pre>`;
+  $("#sheet").hidden = false;
+  $("#card").scrollTop = 0;
+  $("#close").onclick = closeLook;
+  $("#copy").onclick = (e) => {
+    const text = asText(l);
+    navigator.clipboard.writeText(text).then(() => {
+      e.target.textContent = "Copied"; setTimeout(() => (e.target.textContent = "Copy settings"), 1500);
+    }).catch(() => { const pre = $("#copyFallback"); pre.textContent = text; pre.hidden = false; });
+  };
+  if (!l.example) {
+    $("#notes").onchange = (e) => patchLook(l.id, { notes: e.target.value });
+    $("#del").onclick = () => { $("#confirm").hidden = false; };
+    $("#no").onclick = () => { $("#confirm").hidden = true; };
+    $("#yes").onclick = () => { deleteLook(l.id); closeLook(); };
+  }
+}
+function closeLook() { $("#sheet").hidden = true; }
+$("#sheet").addEventListener("click", (e) => { if (e.target === $("#sheet")) closeLook(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLook(); });
+
+function clean(r) {
+  const str = (x) => (typeof x === "string" ? x : x == null ? "" : String(x));
+  const arr = (x) => (Array.isArray(x) ? x.map(str).filter(Boolean) : []);
+  return {
+    title: str(r?.title) || "Untitled look",
+    summary: str(r?.summary),
+    kind: KIND[r?.kind] ? r.kind : "editing",
+    apps: arr(r?.apps), gear: arr(r?.gear), steps: arr(r?.steps), missing: arr(r?.missing),
+    settings: (Array.isArray(r?.settings) ? r.settings : []).map((s) => ({
+      group: str(s?.group) || "Settings", name: str(s?.name), value: str(s?.value),
+      note: str(s?.note), source: SRC[s?.source] ? s.source : "on_screen",
+    })).filter((s) => s.name && s.value),
+  };
+}
+
+/* ---------- asking Gemini ---------- */
+const API = "https://generativelanguage.googleapis.com";
+const MODELS = ["gemini-flash-latest", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-flash-lite-latest"];
+const INLINE_LIMIT = 15 * 1024 * 1024;  // bigger videos go through Google's upload API
+
+const SYSTEM = `You extract photography recipes from short tutorial videos (Instagram reels, TikToks).
+
+You get the video (with its sound), or screenshots of it, plus the post caption if the viewer pasted it. Tutorials usually show values on screen: slider positions in Lightroom, VSCO, Snapseed or iPhone Photos, camera dials and menus, or text overlays. Creators often also say values out loud.
+
+Write down every concrete setting so the viewer can reproduce the look without rewatching.
+- Read slider values carefully. If a value changes over time, give the final value.
+- Group settings by where they live (camera vs. each app and panel), in the order to apply them. For color mixer / HSL / color grading, one row per color and property, e.g. group "Lightroom › Color Mixer", name "Orange Saturation".
+- Keep values exactly as shown or said (signs, units, decimals).
+- source: "on_screen" if read from the picture, "voiceover" if said out loud, "caption" if from the caption, "inferred" only when estimating (say so in the note).
+- Never invent values. Unreadable or paywalled things go in "missing".
+- If this is not a photo or editing tutorial, kind is "not_a_tutorial" and settings is empty.`;
+
+const SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string", description: "Short catchy name for the look" },
+    summary: { type: "string", description: "1-2 sentences on the look and when to use it" },
+    kind: { type: "string", enum: ["camera", "editing", "camera_and_editing", "not_a_tutorial"] },
+    apps: { type: "array", items: { type: "string" } },
+    gear: { type: "array", items: { type: "string" } },
+    settings: { type: "array", items: { type: "object", properties: {
+      group: { type: "string" }, name: { type: "string" }, value: { type: "string" },
+      note: { type: "string" }, source: { type: "string", enum: ["on_screen", "voiceover", "caption", "inferred"] },
+    }, required: ["group", "name", "value", "source"] } },
+    steps: { type: "array", items: { type: "string" } },
+    missing: { type: "array", items: { type: "string" } },
+  },
+  required: ["title", "summary", "kind", "apps", "gear", "settings", "steps", "missing"],
+};
+
+class GeminiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+
+function mimeOf(file) {
+  const t = file.type || "";
+  if (t === "video/quicktime") return "video/mov";
+  if (t) return t;
+  return /\.mov$/i.test(file.name) ? "video/mov" : "video/mp4";
+}
+function b64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1]);
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(file);
+  });
+}
+async function gfetch(url, opts, signal) {
+  const res = await fetch(url, { ...opts, signal, headers: { "x-goog-api-key": getKey(), ...(opts.headers || {}) } });
+  if (!res.ok) {
+    let msg = ""; try { msg = (await res.json()).error?.message || ""; } catch {}
+    throw new GeminiError(msg || res.statusText, res.status);
+  }
+  return res;
+}
+
+async function uploadVideo(file, signal) {
+  const mime = mimeOf(file);
+  const start = await gfetch(API + "/upload/v1beta/files", {
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Protocol": "resumable", "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(file.size), "X-Goog-Upload-Header-Content-Type": mime,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ file: { display_name: "reel" } }),
+  }, signal);
+  const uploadUrl = start.headers.get("x-goog-upload-url");
+  if (!uploadUrl) throw new GeminiError("Google didn't accept the upload. Try a shorter video.", 0);
+  const done = await gfetch(uploadUrl, {
+    method: "POST",
+    headers: { "X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0" },
+    body: file,
+  }, signal);
+  let f = (await done.json()).file;
+  for (let i = 0; f.state === "PROCESSING" && i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    f = await (await gfetch(API + "/v1beta/" + f.name, {}, signal)).json();
+  }
+  if (f.state !== "ACTIVE") throw new GeminiError("Google couldn't process this video.", 0);
+  return f;
+}
+
+async function askGemini(parts, signal) {
+  const body = JSON.stringify({
+    system_instruction: { parts: [{ text: SYSTEM }] },
+    contents: [{ role: "user", parts }],
+    generation_config: { response_mime_type: "application/json", response_json_schema: SCHEMA },
+  });
+  for (let i = 0; i < MODELS.length; i++) {
+    try {
+      const res = await gfetch(`${API}/v1beta/models/${MODELS[i]}:generateContent`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body }, signal);
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+      if (!text) throw new GeminiError("Gemini returned an empty answer. It may have blocked this video.", 0);
+      return JSON.parse(text);
+    } catch (e) {
+      const busy = e instanceof GeminiError && e.status >= 500;
+      if (!busy || i === MODELS.length - 1) throw e;
+      setStatus("Gemini's free servers are busy. Retrying…", "busy");
+      await new Promise((r) => setTimeout(r, 4000 * (i + 1)));
+    }
+  }
+}
+
+function friendly(e) {
+  if (e?.name === "AbortError") return "";
+  if (e instanceof GeminiError) {
+    if (e.status === 400 && /api key/i.test(e.message)) return "That Gemini key isn't valid. Tap \u201cChange Gemini key\u201d and paste it again.";
+    if (e.status === 403) return "Google refused the key. Make sure it's a Gemini API key from aistudio.google.com.";
+    if (e.status === 429) return "You've hit Gemini's free limit. Wait a minute (or until tomorrow for the daily limit) and try again.";
+    if (e.status >= 500) return "Gemini's free servers are busy right now. Try again in a few minutes.";
+    return e.message;
+  }
+  if (e instanceof SyntaxError) return "Gemini's answer came back garbled. Tap Get settings to try again.";
+  return "Couldn't reach Gemini. Check your internet connection and try again.";
+}
+
+/* ---------- thumbnail ---------- */
+function waitFor(el, ev, ms) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout")), ms);
+    el.addEventListener(ev, () => { clearTimeout(t); res(); }, { once: true });
+  });
+}
+async function thumbOf(file) {
+  try {
+    let src;
+    if (file.type.startsWith("image/")) src = await createImageBitmap(file);
+    else {
+      const v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = URL.createObjectURL(file);
+      await waitFor(v, "loadeddata", 8000);
+      v.currentTime = Math.min(v.duration / 3, 3);
+      await waitFor(v, "seeked", 5000);
+      src = v;
+    }
+    const sw = src.videoWidth || src.width, sh = src.videoHeight || src.height;
+    const c = document.createElement("canvas"); c.width = 240; c.height = Math.round((sh / sw) * 240);
+    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.7);
+  } catch { return ""; }
+}
+
+/* ---------- main flow ---------- */
+let picked = [];
+$("#file").addEventListener("change", () => {
+  picked = [...$("#file").files];
+  const vids = picked.filter((f) => f.type.startsWith("video/") || /\.(mov|mp4|m4v)$/i.test(f.name));
+  $("#pickTitle").textContent = vids.length ? vids[0].name || "Video selected"
+    : picked.length ? `${picked.length} screenshot${picked.length > 1 ? "s" : ""} selected` : "Choose the reel video";
+  $("#pickSub").textContent = picked.length ? "Tap to choose something else" : "From Photos or Files. Screenshots work too.";
+  setStatus("");
+});
+$("#link").addEventListener("input", () => { $("#linkHint").hidden = !$("#link").value.trim(); });
+
+function setStatus(text, kind) {
+  $("#status").hidden = !text;
+  $("#status").className = "status" + (kind === "error" ? " error" : "");
+  $("#spin").hidden = kind !== "busy";
+  $("#statusText").textContent = text || "";
+}
+$("#stop").addEventListener("click", () => ctl?.abort());
+
+$("#go").addEventListener("click", async () => {
+  if (!getKey()) { showKeyCard(true); return; }
+  if (!picked.length) {
+    setStatus($("#link").value.trim()
+      ? "Instagram won't let apps download from a link. Save the reel to your phone first (⋯ → Download, or screen-record it), then choose that video."
+      : "Choose the reel video first.", "error");
+    $("#file").click();
+    return;
+  }
+  const video = picked.find((f) => f.type.startsWith("video/") || /\.(mov|mp4|m4v)$/i.test(f.name));
+  const images = picked.filter((f) => f.type.startsWith("image/")).slice(0, 20);
+  ctl = new AbortController();
+  $("#go").disabled = true; $("#stop").hidden = false;
+  let uploaded = null;
+  try {
+    const parts = [];
+    if (video) {
+      if (video.size <= INLINE_LIMIT) {
+        setStatus("Getting the video ready…", "busy");
+        parts.push({ inline_data: { mime_type: mimeOf(video), data: await b64(video) }, video_metadata: { fps: 2 } });
+      } else {
+        setStatus("Uploading the video to Gemini…", "busy");
+        uploaded = await uploadVideo(video, ctl.signal);
+        parts.push({ file_data: { file_uri: uploaded.uri, mime_type: uploaded.mimeType }, video_metadata: { fps: 2 } });
+      }
+    } else {
+      for (const img of images) parts.push({ inline_data: { mime_type: img.type, data: await b64(img) } });
+    }
+    const caption = $("#caption").value.trim();
+    parts.push({ text: (caption ? `<caption>\n${caption}\n</caption>\n\n` : "")
+      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too." : "These are screenshots of the tutorial, in order. Extract every setting.") });
+
+    setStatus("Gemini is watching the reel. This takes up to a minute…", "busy");
+    const raw = await askGemini(parts, ctl.signal);
+    const look = {
+      id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      ...clean(raw), url: $("#link").value.trim(), notes: "", created: Date.now(),
+      thumb: await thumbOf(video || images[0]),
+    };
+    await saveLook(look);
+    setStatus("");
+    for (const id of ["link", "caption"]) $("#" + id).value = "";
+    $("#linkHint").hidden = true;
+    openLook(look);
+  } catch (e) {
+    const msg = friendly(e);
+    setStatus(msg, msg ? "error" : null);
+    if (e instanceof GeminiError && e.status === 400 && /api key/i.test(e.message)) showKeyCard(true);
+  } finally {
+    $("#stop").hidden = true; $("#go").disabled = false;
+    if (uploaded) fetch(API + "/v1beta/" + uploaded.name, { method: "DELETE", headers: { "x-goog-api-key": getKey() } }).catch(() => {});
+  }
+});
+
+/* ---------- start ---------- */
+looks = loadLooks();
+render();
+showKeyCard(!getKey());
+</script>
+</body>
+</html>
