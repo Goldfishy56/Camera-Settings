@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
 GEMINI_FPS = float(os.environ.get("GEMINI_FPS", "2"))
 MAX_FRAMES = int(os.environ.get("MAX_FRAMES", "40"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
@@ -172,7 +173,7 @@ def which_provider() -> str:
 
 def ask_gemini(caption: str, video: Path) -> Look:
     from google import genai
-    from google.genai import types
+    from google.genai import errors as genai_errors, types
 
     client = genai.Client()  # reads GEMINI_API_KEY / GOOGLE_API_KEY
     uploaded = client.files.upload(file=video)
@@ -186,8 +187,7 @@ def ask_gemini(caption: str, video: Path) -> Look:
         if uploaded.state == types.FileState.FAILED:
             raise RuntimeError("Gemini couldn't process this video.")
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+        request = dict(
             contents=[
                 types.Part(
                     file_data=types.FileData(file_uri=uploaded.uri, mime_type=uploaded.mime_type),
@@ -201,8 +201,20 @@ def ask_gemini(caption: str, video: Path) -> Look:
                 system_instruction=SYSTEM_PROMPT,
                 response_mime_type="application/json",
                 response_json_schema=Look.model_json_schema(),
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             ),
         )
+        # The free tier is often "overloaded" for a moment; wait and retry, and
+        # fall back to the lighter Flash model if the main one stays busy.
+        models = [GEMINI_MODEL] * 3 + [GEMINI_FALLBACK_MODEL] * 2
+        for attempt, model in enumerate(models):
+            try:
+                response = client.models.generate_content(model=model, **request)
+                break
+            except genai_errors.ServerError:
+                if attempt == len(models) - 1:
+                    raise RuntimeError("Gemini's free servers are busy right now — try again in a few minutes.")
+                time.sleep(5 * (attempt + 1))
         if not response.text:
             raise RuntimeError("Gemini returned an empty answer (it may have blocked the video) — try again.")
         return Look.model_validate_json(response.text)
