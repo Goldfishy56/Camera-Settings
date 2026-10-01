@@ -280,15 +280,20 @@ function asText(l) {
   return out.join("\n").trim();
 }
 function groups(settings) {
-  const m = new Map();
-  for (const s of settings) { if (!m.has(s.group)) m.set(s.group, []); m.get(s.group).push(s); }
-  return m;
+  // Runs of consecutive settings from the same panel, in video order.
+  const runs = [];
+  for (const s of settings) {
+    const last = runs[runs.length - 1];
+    if (last && last[0] === s.group) last[1].push(s); else runs.push([s.group, [s]]);
+  }
+  return runs;
 }
+const clock = (t) => (typeof t === "number" && t >= 0 ? `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}` : "");
 function openLook(l) {
   if (!l) return;
   const list = (items) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
-  const sets = [...groups(l.settings)].map(([g, rows]) => `<div class="group"><h4>${esc(g)}</h4><div class="rows">${rows.map((s) => `
-      <div class="set"><div class="name">${esc(s.name)}<span class="src ${s.source === "inferred" ? "estimated" : ""}">${SRC[s.source] || ""}</span>
+  const sets = groups(l.settings).map(([g, rows]) => `<div class="group"><h4>${esc(g)}</h4><div class="rows">${rows.map((s) => `
+      <div class="set"><div class="name">${esc(s.name)}<span class="src ${s.source === "inferred" ? "estimated" : ""}">${[clock(s.time), SRC[s.source]].filter(Boolean).join(" · ")}</span>
       ${s.note ? `<small>${esc(s.note)}</small>` : ""}</div><span class="val">${esc(s.value)}</span></div>`).join("")}</div></div>`).join("");
   $("#card").innerHTML = `
     <div class="top"><h3 id="lookTitle">${esc(l.title)}</h3><button id="close" aria-label="Close">✕</button></div>
@@ -326,6 +331,32 @@ function closeLook() { $("#sheet").hidden = true; }
 $("#sheet").addEventListener("click", (e) => { if (e.target === $("#sheet")) closeLook(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLook(); });
 
+function cleanSettings(list) {
+  const str = (x) => (typeof x === "string" ? x : x == null ? "" : String(x));
+  return (Array.isArray(list) ? list : []).map((s) => ({
+    time: Number.isFinite(Number(s?.time)) ? Number(s.time) : null,
+    group: str(s?.group) || "Settings", name: str(s?.name), value: str(s?.value),
+    note: str(s?.note), source: SRC[s?.source] ? s.source : "on_screen",
+  })).filter((s) => s.name && s.value);
+}
+function sortByTime(settings) {
+  // Stable: settings without a time keep their place relative to their neighbours.
+  return settings.map((s, i) => [s, i]).sort((a, b) => {
+    const ta = a[0].time ?? Infinity, tb = b[0].time ?? Infinity;
+    return ta === tb ? a[1] - b[1] : ta - tb;
+  }).map(([s]) => s);
+}
+// Second pass: add what was missed, replace values that were corrected.
+function mergeSettings(found, extra) {
+  const key = (s) => (s.group + "|" + s.name).toLowerCase();
+  const out = [...found];
+  for (const s of cleanSettings(extra)) {
+    const i = out.findIndex((o) => key(o) === key(s));
+    if (i === -1) out.push(s); else if (out[i].value !== s.value) out[i] = { ...s, time: s.time ?? out[i].time };
+  }
+  return sortByTime(out);
+}
+
 function clean(r) {
   const str = (x) => (typeof x === "string" ? x : x == null ? "" : String(x));
   const arr = (x) => (Array.isArray(x) ? x.map(str).filter(Boolean) : []);
@@ -334,10 +365,7 @@ function clean(r) {
     summary: str(r?.summary),
     kind: KIND[r?.kind] ? r.kind : "editing",
     apps: arr(r?.apps), gear: arr(r?.gear), steps: arr(r?.steps), missing: arr(r?.missing),
-    settings: (Array.isArray(r?.settings) ? r.settings : []).map((s) => ({
-      group: str(s?.group) || "Settings", name: str(s?.name), value: str(s?.value),
-      note: str(s?.note), source: SRC[s?.source] ? s.source : "on_screen",
-    })).filter((s) => s.name && s.value),
+    settings: sortByTime(cleanSettings(r?.settings)),
   };
 }
 
@@ -348,16 +376,30 @@ const INLINE_LIMIT = 15 * 1024 * 1024;  // bigger videos go through Google's upl
 
 const SYSTEM = `You extract photography recipes from short tutorial videos (Instagram reels, TikToks).
 
-You get the video (with its sound), or screenshots of it, plus the post caption if the viewer pasted it. Tutorials usually show values on screen: slider positions in Lightroom, VSCO, Snapseed or iPhone Photos, camera dials and menus, or text overlays. Creators often also say values out loud.
+You get the video (with its sound), or screenshots of it, plus the post caption if the viewer pasted it. Tutorials show values on screen (slider positions in Lightroom, VSCO, Snapseed, iPhone Photos or a camera app, camera dials and menus, text overlays) and often say them out loud.
 
-Write down every concrete setting so the viewer can reproduce the look without rewatching.
-- Read slider values carefully. If a value changes over time, give the final value.
-- Group settings by where they live (camera vs. each app and panel), in the order to apply them. For color mixer / HSL / color grading, one row per color and property, e.g. group "Lightroom › Color Mixer", name "Orange Saturation".
+Your list must be complete and in the same order as the video, so the viewer can follow it step by step without rewatching.
+
+How to work:
+1. Go through the video from start to finish, second by second. Every time a panel or tool opens, a slider moves, a value is typed, a preset or filter is picked, or a value is said or shown as text, that is a setting.
+2. Include every slider that is touched, even briefly or quickly, and even if it is set back to 0. Small changes count (e.g. Texture -5).
+3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
+4. Read numbers carefully from the screen. If a value changes several times, give the value it ends on.
+
+Rules:
+- time: seconds into the video where that final value is shown or said.
+- group: the app and panel it lives in, e.g. "Lightroom › Light", "Lightroom › Color Mixer", "Camera".
 - Keep values exactly as shown or said (signs, units, decimals).
 - source: "on_screen" if read from the picture, "voiceover" if said out loud, "caption" if from the caption, "inferred" only when estimating (say so in the note).
 - Never invent values. Unreadable or paywalled things go in "missing".
 - If this is not a photo or editing tutorial, kind is "not_a_tutorial" and settings is empty.`;
 
+const RECHECK = (found) => `A first pass over this same tutorial found these settings (time in seconds, panel, setting, value):
+${found.map((s) => `${s.time ?? "?"}s | ${s.group} | ${s.name} | ${s.value}`).join("\n") || "(none)"}
+
+Watch the whole video again from start to finish, closely, and look for anything this list is missing: sliders that were touched quickly, every color in HSL / color mixer, color grading wheels, curves, effects, detail, masks, crop, presets, camera settings, and values only said out loud. Also check every value above against the screen.
+
+Return in "settings" ONLY settings that are missing from the list, or whose value above is wrong (give the correct value and put "corrected" in the note). If nothing is missing, return an empty settings array. Fill the other fields as normal.`;
 const SCHEMA = {
   type: "object",
   properties: {
@@ -367,9 +409,10 @@ const SCHEMA = {
     apps: { type: "array", items: { type: "string" } },
     gear: { type: "array", items: { type: "string" } },
     settings: { type: "array", items: { type: "object", properties: {
+      time: { type: "number", description: "Seconds into the video where the final value appears" },
       group: { type: "string" }, name: { type: "string" }, value: { type: "string" },
       note: { type: "string" }, source: { type: "string", enum: ["on_screen", "voiceover", "caption", "inferred"] },
-    }, required: ["group", "name", "value", "source"] } },
+    }, required: ["time", "group", "name", "value", "source"] } },
     steps: { type: "array", items: { type: "string" } },
     missing: { type: "array", items: { type: "string" } },
   },
@@ -428,16 +471,30 @@ async function uploadVideo(file, signal) {
   return f;
 }
 
-async function askGemini(parts, signal) {
-  const body = JSON.stringify({
+let detailed = true;  // switched off for good if the model rejects high-detail video
+function requestBody(parts) {
+  const config = { response_mime_type: "application/json", response_json_schema: SCHEMA };
+  if (detailed) config.media_resolution = "MEDIA_RESOLUTION_HIGH";
+  const fps = detailed ? 3 : 2;
+  return JSON.stringify({
     system_instruction: { parts: [{ text: SYSTEM }] },
-    contents: [{ role: "user", parts }],
-    generation_config: { response_mime_type: "application/json", response_json_schema: SCHEMA },
+    contents: [{ role: "user", parts: parts.map((p) => (p.video_metadata ? { ...p, video_metadata: { fps } } : p)) }],
+    generation_config: config,
   });
+}
+async function askGemini(parts, signal) {
   for (let i = 0; i < MODELS.length; i++) {
     try {
-      const res = await gfetch(`${API}/v1beta/models/${MODELS[i]}:generateContent`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body }, signal);
+      let res;
+      try {
+        res = await gfetch(`${API}/v1beta/models/${MODELS[i]}:generateContent`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts) }, signal);
+      } catch (e) {
+        if (!(detailed && e instanceof GeminiError && e.status === 400 && !/api key/i.test(e.message))) throw e;
+        detailed = false;
+        res = await gfetch(`${API}/v1beta/models/${MODELS[i]}:generateContent`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts) }, signal);
+      }
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
       if (!text) throw new GeminiError("Gemini returned an empty answer. It may have blocked this video.", 0);
@@ -523,7 +580,6 @@ $("#go").addEventListener("click", async () => {
   const images = picked.filter((f) => f.type.startsWith("image/")).slice(0, 20);
   ctl = new AbortController();
   $("#go").disabled = true; $("#stop").hidden = false;
-  let uploaded = null;
   try {
     const parts = [];
     if (video) {
@@ -532,7 +588,7 @@ $("#go").addEventListener("click", async () => {
         parts.push({ inline_data: { mime_type: mimeOf(video), data: await b64(video) }, video_metadata: { fps: 2 } });
       } else {
         setStatus("Uploading the video to Gemini…", "busy");
-        uploaded = await uploadVideo(video, ctl.signal);
+        const uploaded = await uploadVideo(video, ctl.signal);  // Google deletes it after 48 hours
         parts.push({ file_data: { file_uri: uploaded.uri, mime_type: uploaded.mimeType }, video_metadata: { fps: 2 } });
       }
     } else {
@@ -543,10 +599,22 @@ $("#go").addEventListener("click", async () => {
       + (video ? "Extract every setting from this tutorial. Listen to the voiceover too." : "These are screenshots of the tutorial, in order. Extract every setting.") });
 
     setStatus("Gemini is watching the reel. This takes up to a minute…", "busy");
-    const raw = await askGemini(parts, ctl.signal);
+    const first = clean(await askGemini(parts, ctl.signal));
+    if (first.kind !== "not_a_tutorial") {
+      setStatus("Watching again for anything it missed…", "busy");
+      try {
+        const second = await askGemini([...parts, { text: RECHECK(first.settings) }], ctl.signal);
+        first.settings = mergeSettings(first.settings, second?.settings);
+        for (const k of ["apps", "gear", "steps", "missing"]) {
+          for (const x of clean(second)[k]) if (!first[k].includes(x)) first[k].push(x);
+        }
+      } catch (e) {
+        if (e?.name === "AbortError") throw e;  // otherwise keep the first pass
+      }
+    }
     const look = {
       id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      ...clean(raw), url: $("#link").value.trim(), notes: "", created: Date.now(),
+      ...first, url: $("#link").value.trim(), notes: "", created: Date.now(),
       thumb: await thumbOf(video || images[0]),
     };
     await saveLook(look);
@@ -560,7 +628,6 @@ $("#go").addEventListener("click", async () => {
     if (e instanceof GeminiError && e.status === 400 && /api key/i.test(e.message)) showKeyCard(true);
   } finally {
     $("#stop").hidden = true; $("#go").disabled = false;
-    if (uploaded) fetch(API + "/v1beta/" + uploaded.name, { method: "DELETE", headers: { "x-goog-api-key": getKey() } }).catch(() => {});
   }
 });
 
