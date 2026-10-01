@@ -194,7 +194,7 @@
 <div class="sheet" id="sheet" hidden><div class="card" id="card" role="dialog" aria-modal="true"></div></div>
 
 <script>
-const VERSION = "1.5";
+const VERSION = "1.9";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const KIND = { camera: "Camera", editing: "Editing", camera_and_editing: "Camera + editing", not_a_tutorial: "Not a tutorial" };
@@ -306,7 +306,7 @@ function openLook(l) {
     ${l.steps.length ? `<div><h4>Steps and tips</h4>${list(l.steps)}</div>` : ""}
     ${l.missing.length ? `<div><h4>Couldn't read</h4>${list(l.missing)}</div>` : ""}
     ${l.example ? "" : `<label class="field">My notes<textarea id="notes" placeholder="How it worked on your photos">${esc(l.notes || "")}</textarea></label>`}
-    ${l.example ? "" : l.readWith ? `<p class="note">Read by v${esc(l.readWith.version)}${l.readWith.video ? ` from ${l.readWith.screens} screen${l.readWith.screens === 1 ? "" : "s"} of the video` : ""}.</p>` : `<p class="note">Read by an older version (before v1.5).</p>`}
+    ${l.example ? "" : l.readWith ? `<p class="note">Read by v${esc(l.readWith.version)}${l.readWith.video ? ` from ${l.readWith.screens} moment${l.readWith.screens === 1 ? "" : "s"} of the video` : ""}.</p>` : `<p class="note">Read by an older version (before v1.5).</p>`}
     <div class="row">
       <button class="primary" id="copy">Copy settings</button>
       ${l.url ? `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open reel</a>` : ""}
@@ -338,7 +338,9 @@ function cleanSettings(list) {
   const str = (x) => (typeof x === "string" ? x : x == null ? "" : String(x));
   return (Array.isArray(list) ? list : []).map((s) => ({
     time: Number.isFinite(Number(s?.time)) ? Number(s.time) : null,
-    group: str(s?.group) || "Settings", name: str(s?.name), value: str(s?.value),
+    group: (str(s?.group).replace(/\s*(?:[›‱′»>|\\/]+|\s[-–—:]\s)\s*/g, " › ").replace(/\s+/g, " ").trim()) || "Settings",
+    name: str(s?.name).trim().replace(/\bSat\b\.?/gi, "Saturation").replace(/\bLum\b\.?/gi, "Luminance").replace(/\bTemp\b\.?(?=\s|$)/g, "Temp"),
+    value: str(s?.value).trim(),
     note: str(s?.note), source: SRC[s?.source] ? s.source : "on_screen",
   })).filter((s) => s.name && s.value);
 }
@@ -349,15 +351,65 @@ function sortByTime(settings) {
     return ta === tb ? a[1] - b[1] : ta - tb;
   }).map(([s]) => s);
 }
-// Second pass: add what was missed, replace values that were corrected.
-function mergeSettings(found, extra) {
-  const key = (s) => (s.group + "|" + s.name).toLowerCase();
+const settingKey = (s) => (s.group + "|" + s.name).toLowerCase();
+// Add settings from `extra` that `found` lacks; replace differing values only if `override`.
+function mergeSettings(found, extra, override = true) {
   const out = [...found];
   for (const s of cleanSettings(extra)) {
-    const i = out.findIndex((o) => key(o) === key(s));
-    if (i === -1) out.push(s); else if (out[i].value !== s.value) out[i] = { ...s, time: s.time ?? out[i].time };
+    const i = out.findIndex((o) => settingKey(o) === settingKey(s));
+    if (i === -1) out.push(s); else if (override && out[i].value !== s.value) out[i] = { ...s, time: s.time ?? out[i].time };
   }
   return sortByTime(out);
+}
+// The same panel is often read from several moments; keep its first reading.
+function dedupe(settings) {
+  const seen = new Set();
+  return settings.filter((s) => { const k = settingKey(s); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+// Lightroom's color mixer always runs Red → Magenta and tutorials step through it in that
+// order. The filled dot is tiny, so a color is sometimes misread (Blue read as Purple). When
+// two different panels come back with the same color, relabel the panels in time order with
+// the fewest changes that makes the colors run in order.
+const MIXER = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
+function fixMixerOrder(settings) {
+  const colorOf = (s) => MIXER.findIndex((c) => s.name.toLowerCase().startsWith(c.toLowerCase() + " "));
+  const isMixer = (s) => /mixer|hsl/i.test(s.group) && colorOf(s) >= 0;
+  const panels = [];
+  for (const s of settings.filter(isMixer)) {
+    const prop = s.name.slice(MIXER[colorOf(s)].length + 1).toLowerCase();
+    const last = panels[panels.length - 1];
+    if (last && last.color === colorOf(s) && !last.props.has(prop)) { last.items.push(s); last.props.set(prop, s.value); }
+    else panels.push({ color: colorOf(s), items: [s], props: new Map([[prop, s.value]]) });
+  }
+  // The same panel read again from a later moment is one panel: same color and no number
+  // disagrees, or a different color but identical (non-zero) numbers, i.e. a misread dot.
+  const merged = [];
+  const numbersAgree = (a, b) => [...b.props].every(([k, v]) => !a.props.has(k) || a.props.get(k) === v);
+  const identical = (a, b) => a.props.size === b.props.size && a.props.size >= 2 && numbersAgree(a, b)
+    && [...a.props.values()].some((v) => Number(String(v).replace(/[^\d.-]/g, "")) !== 0);
+  for (const pnl of panels) {
+    const prev = merged[merged.length - 1];
+    const same = prev && ((prev.color === pnl.color && numbersAgree(prev, pnl)) || identical(prev, pnl));
+    if (same) { for (const it of pnl.items) if (!prev.props.has(it.name.slice(MIXER[pnl.color].length + 1).toLowerCase())) prev.items.push(it); for (const [k, v] of pnl.props) prev.props.set(k, v); }
+    else merged.push(pnl);
+  }
+  const colors = merged.map((pnl) => pnl.color);
+  if (new Set(colors).size === colors.length || merged.length > MIXER.length) return settings;
+  // Strictly increasing colors, fewest relabels (small dynamic programme over 8 colors).
+  const n = merged.length, INF = 1e9;
+  const cost = Array.from({ length: n }, () => Array(MIXER.length).fill(INF));
+  const from = Array.from({ length: n }, () => Array(MIXER.length).fill(-1));
+  for (let c = 0; c < MIXER.length; c++) cost[0][c] = c === colors[0] ? 0 : 1;
+  for (let i = 1; i < n; i++) for (let c = 0; c < MIXER.length; c++) for (let pc = 0; pc < c; pc++) {
+    const v = cost[i - 1][pc] + (c === colors[i] ? 0 : 1);
+    if (v < cost[i][c]) { cost[i][c] = v; from[i][c] = pc; }
+  }
+  let c = cost[n - 1].indexOf(Math.min(...cost[n - 1]));
+  const assigned = Array(n);
+  for (let i = n - 1; i >= 0; i--) { assigned[i] = c; c = from[i][c]; }
+  const rename = new Map();
+  merged.forEach((pnl, i) => { for (const it of pnl.items) rename.set(it, MIXER[assigned[i]] + it.name.slice(MIXER[pnl.color].length)); });
+  return settings.map((s) => (rename.has(s) ? { ...s, name: rename.get(s) } : s));
 }
 
 function clean(r) {
@@ -374,7 +426,7 @@ function clean(r) {
 
 /* ---------- asking Gemini ---------- */
 const API = "https://generativelanguage.googleapis.com";
-const MODELS = ["gemini-flash-latest", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-flash-lite-latest"];
+const MODEL_ORDER = ["gemini-flash-latest", "gemini-flash-lite-latest"];
 const INLINE_LIMIT = 15 * 1024 * 1024;  // bigger videos go through Google's upload API
 
 const SYSTEM = `You extract photography recipes from short tutorial videos (Instagram reels, TikToks).
@@ -386,11 +438,11 @@ Your list must be complete and in the same order as the video, so the viewer can
 How to work:
 1. Go through the video from start to finish, second by second. Every time a panel or tool opens, a slider moves, a value is typed, a preset or filter is picked, or a value is said or shown as text, that is a setting.
 2. Include every slider that is touched, even briefly or quickly, and even if it is set back to 0. Small changes count (e.g. Texture -5).
-3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). In Lightroom's color mixer the row of dots is always Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta, and the color being edited is the FILLED dot: name each panel by its filled dot, and treat every color's panel as separate even if its numbers look like the previous one. Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
+3. Panels with many controls: one row per control. HSL / Color Mixer: one row per color and property ("Orange Hue", "Orange Saturation", "Orange Luminance"). In Lightroom's color mixer the row of dots is always Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta, and the color being edited is the FILLED dot (solid, with a white center). Don't judge it by color: count its position from the left, 1 = Red, 2 = Orange, 3 = Yellow, 4 = Green, 5 = Aqua, 6 = Blue, 7 = Purple, 8 = Magenta. Name each panel by that position, and treat every color's panel as separate even if its numbers look like the previous one. Color grading: one row per wheel and property (Shadows/Midtones/Highlights/Global Hue, Saturation, Luminance, plus Blending and Balance). Tone curve: describe each point or the shape, per channel. Also effects (Texture, Clarity, Dehaze, Vignette, Grain), Detail, Optics, Masks, Crop and aspect ratio, presets and filters, and camera settings (ISO, shutter, aperture, white balance, exposure compensation, lens, mode).
 4. Read numbers carefully from the screen. If a value changes several times, give the value it ends on.
-5. Panels and text cards often flash by for a fraction of a second. You also get sharp stills of every screen change with their times: read every one, and list every control and value on every panel shown (all sliders visible on it, not just the one being moved). Use the still's time as the time.
+5. Panels and text cards often flash by for a fraction of a second. You also get sharp pictures of the video about every 0.2 seconds, packed 4 to an image with a yellow time label on each: read every one, and list every control and value on every panel shown (all sliders visible on it, not just the one being moved). Use the moment's time label as the time. The same panel usually appears in 2-3 moments in a row; list it once. But two moments only count as the same panel if the same item is selected (same filled dot, same wheel) AND every number matches. If the filled dot or ANY number differs, it is a different panel (e.g. Red then Orange in a color mixer can both show Hue -3 but differ in Saturation): list both.
 
-Before the settings, fill "screens": go through the stills one at a time and write down what each one shows and every label and number on it. Then build "settings" from your screens notes plus the voiceover and caption, so no still is skipped or mixed up with its neighbour.
+Before the settings, fill "screens": go through the moments one at a time (every grid cell, by its time label) and write down what each one shows and every label and number on it; for a run of moments showing exactly the same panel (same filled dot and identical numbers) you may write one entry. For color mixer moments, always start the note with the filled dot's position and color, e.g. "dot 2 of 8 filled = Orange". Then build "settings" from your screens notes plus the voiceover and caption, so no panel is skipped or mixed up with its neighbour.
 
 Rules:
 - time: seconds into the video where that final value is shown or said.
@@ -400,16 +452,10 @@ Rules:
 - Never invent values. Unreadable or paywalled things go in "missing".
 - If this is not a photo or editing tutorial, kind is "not_a_tutorial" and settings is empty.`;
 
-const RECHECK = (found) => `A first pass over this same tutorial found these settings (time in seconds, panel, setting, value):
-${found.map((s) => `${s.time ?? "?"}s | ${s.group} | ${s.name} | ${s.value}`).join("\n") || "(none)"}
-
-Go through every still again one by one, from the first to the last, and look for anything this list is missing: sliders that were touched quickly, every color in HSL / color mixer, color grading wheels, curves, effects, detail, masks, crop, presets, camera settings, and values only said out loud. Also check every value above against the screen.
-
-Return in "settings" ONLY settings that are missing from the list, or whose value above is wrong (give the correct value and put "corrected" in the note). If nothing is missing, return an empty settings array. Fill the other fields as normal.`;
 const SCHEMA = {
   type: "object",
   properties: {
-    screens: { type: "array", description: "FIRST, one entry per still image, in order: what it shows and every label and number on it, read exactly.",
+    screens: { type: "array", description: "FIRST, one entry per moment (grid cell) in time order, or per run of moments showing the same panel: what it shows and every label and number on it, read exactly.",
       items: { type: "object", properties: {
         time: { type: "number" },
         shows: { type: "string", description: "Which app panel or card this is. For a color mixer, which dot is filled (that is the color being edited)." },
@@ -494,17 +540,23 @@ function requestBody(parts) {
     generation_config: config,
   });
 }
+// A model that is out of quota or overloaded twice is skipped for the rest of the reel,
+// so a busy main model doesn't add a long wait to every request.
+let strikes = new Map();
 async function askGemini(parts, signal) {
-  for (let i = 0; i < MODELS.length; i++) {
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const model = MODEL_ORDER.find((m) => (strikes.get(m) || 0) < 2);
+    if (!model) break;
     try {
       let res;
       try {
-        res = await gfetch(`${API}/v1beta/models/${MODELS[i]}:generateContent`,
+        res = await gfetch(`${API}/v1beta/models/${model}:generateContent`,
           { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts) }, signal);
       } catch (e) {
         if (!(detailed && e instanceof GeminiError && e.status === 400 && !/api key/i.test(e.message))) throw e;
         detailed = false;
-        res = await gfetch(`${API}/v1beta/models/${MODELS[i]}:generateContent`,
+        res = await gfetch(`${API}/v1beta/models/${model}:generateContent`,
           { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody(parts) }, signal);
       }
       const data = await res.json();
@@ -512,12 +564,20 @@ async function askGemini(parts, signal) {
       if (!text) throw new GeminiError("Gemini returned an empty answer. It may have blocked this video.", 0);
       return JSON.parse(text);
     } catch (e) {
+      const limited = e instanceof GeminiError && e.status === 429;
       const busy = e instanceof GeminiError && e.status >= 500;
-      if (!busy || i === MODELS.length - 1) throw e;
-      setStatus("Gemini's free servers are busy. Retrying…", "busy");
-      await new Promise((r) => setTimeout(r, 4000 * (i + 1)));
+      if (!(busy || limited)) throw e;
+      lastErr = e;
+      strikes.set(model, (strikes.get(model) || 0) + 1);
+      const next = MODEL_ORDER.find((m) => (strikes.get(m) || 0) < 2);
+      if (!next) break;
+      if (next === model) {
+        setStatus(limited ? "Waiting a moment for Gemini's free per-minute limit…" : "Gemini's free servers are busy. Retrying…", "busy");
+        await new Promise((r) => setTimeout(r, limited ? 15000 : 4000));
+      }
     }
   }
+  throw lastErr;
 }
 
 function friendly(e) {
@@ -559,12 +619,15 @@ async function thumbOf(file) {
   } catch { return ""; }
 }
 
-/* ---------- stills of every screen change ---------- */
-// Tutorials often flash each settings panel for a fraction of a second, which falls
-// between the frames Gemini samples and is too small to read. So scan the video on the
-// phone ~10 times a second, find each moment the screen changes, and send a sharp
-// full-size still of each one.
-const MAX_STILLS = 60;
+/* ---------- grids of moments from the video ---------- */
+// Tutorials often flash each settings panel for a third of a second, which falls between
+// the frames Gemini samples and is too small for it to read. Look-alike panels (Red vs
+// Orange in a color mixer) also can't be told apart by guessing where the screen changed.
+// So: in every part of the video that isn't standing still, take a sharp picture every
+// ~0.2s (faster than any panel stays up), label each with its time, and pack 4 into one
+// image to stay inside Gemini's free limits.
+const MAX_FRAMES = 160;   // 40 grid images
+const PER_SHEET = 4;      // 2 x 2
 async function scanStills(file, onProgress) {
   const v = document.createElement("video");
   v.muted = true; v.playsInline = true; v.preload = "auto";
@@ -584,13 +647,13 @@ async function scanStills(file, onProgress) {
     try { await v.play(); v.pause(); } catch { /* muted play may be refused; seeking still works */ }
     if (v.readyState < 2) await waitFor(v, "loadeddata", 10000).catch(() => {});
     const d = v.duration;
-    if (!isFinite(d) || d <= 0 || !v.videoWidth) return [];
+    if (!isFinite(d) || d <= 0 || !v.videoWidth) return { frames: 0, sheets: [] };
 
-    // 1. Tiny greyscale samples to spot changes.
+    // 1. Tiny greyscale samples to find the parts that stand still.
     const sw = 48, sh = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
     const small = document.createElement("canvas"); small.width = sw; small.height = sh;
     const sctx = small.getContext("2d", { willReadFrequently: true });
-    const step = Math.max(0.1, d / 400);
+    const step = Math.max(0.1, d / 600);
     const samples = [];
     for (let t = 0; t < d; t += step) {
       if (!(await seekTo(t))) { if (failed > 20) break; continue; }
@@ -598,43 +661,56 @@ async function scanStills(file, onProgress) {
       const px = sctx.getImageData(0, 0, sw, sh).data, g = new Uint8Array(sw * sh);
       for (let i = 0; i < g.length; i++) g[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
       samples.push({ t, g });
-      onProgress?.(t / d);
+      onProgress?.(0.8 * t / d);
     }
-    if (samples.length < 2) return [];
+    if (samples.length < 2) return { frames: 0, sheets: [] };
     const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
 
-    // 2. Keep a sample whenever it differs enough from the last one kept.
-    const select = (th) => {
-      const kept = [0];
-      for (let i = 1; i < samples.length; i++) if (diff(samples[i].g, samples[kept[kept.length - 1]].g) > th) kept.push(i);
-      return kept;
+    // 2. A moment every `gap` seconds, skipping stretches where nothing on screen changes.
+    const select = (gap) => {
+      const kept = [samples[0]];
+      for (const smp of samples.slice(1)) {
+        const last = kept[kept.length - 1];
+        if (smp.t - last.t >= gap - 1e-6 && diff(smp.g, last.g) > 1.5) kept.push(smp);
+      }
+      const end = samples[samples.length - 1];
+      if (end.t - kept[kept.length - 1].t > 0.15) kept.push(end);
+      return kept.map((k) => k.t);
     };
-    let th = 7, kept = select(th);
-    while (kept.length > MAX_STILLS - 1) { th *= 1.25; kept = select(th); }
+    let gap = 0.2, times = select(gap);
+    while (times.length > MAX_FRAMES) { gap += 0.05; times = select(gap); }
 
-    // 3. Panels fade in, so within each change take the steadiest of the next few samples.
-    const times = kept.map((k, n) => {
-      const end = Math.min(k + 3, (kept[n + 1] ?? samples.length) - 1, samples.length - 2);
-      let best = k, bestD = Infinity;
-      for (let j = k; j <= end; j++) { const dj = diff(samples[j].g, samples[j + 1].g); if (dj < bestD) { bestD = dj; best = j; } }
-      return samples[best].t;
-    });
-    const last = Math.max(0, d - 0.1);
-    if (last - times[times.length - 1] > 0.3) times.push(last);
-
-    // 4. Sharp full-size stills at those moments.
-    const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
-    const c = document.createElement("canvas");
-    c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
-    const stills = [];
-    for (const t of times) {
+    // 3. Sharp pictures, labelled with their time, packed 2 x 2 into each image.
+    const fw = Math.min(540, v.videoWidth), fh = Math.round((fw * v.videoHeight) / v.videoWidth);
+    const sheetCanvas = document.createElement("canvas");
+    sheetCanvas.width = fw * 2; sheetCanvas.height = fh * 2;
+    const ctx = sheetCanvas.getContext("2d");
+    const sheets = [];
+    let cell = 0, sheetTimes = [];
+    const flush = async () => {
+      if (!sheetTimes.length) return;
+      const blob = await new Promise((r) => sheetCanvas.toBlob(r, "image/jpeg", 0.9));
+      if (blob) sheets.push({ times: sheetTimes, blob });
+      sheetTimes = []; cell = 0;
+    };
+    let frames = 0;
+    for (const [n, t] of times.entries()) {
       if (!(await seekTo(t))) continue;
-      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-      const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
-      if (blob) stills.push({ t, blob });
+      if (cell === 0) { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, sheetCanvas.width, sheetCanvas.height); }
+      const x = (cell % 2) * fw, y = Math.floor(cell / 2) * fh;
+      ctx.drawImage(v, x, y, fw, fh);
+      const label = t.toFixed(1) + "s";
+      ctx.font = "bold 30px system-ui, sans-serif";
+      ctx.fillStyle = "#000"; ctx.fillRect(x, y, ctx.measureText(label).width + 16, 40);
+      ctx.fillStyle = "#ffe14d"; ctx.fillText(label, x + 8, y + 30);
+      ctx.strokeStyle = "#000"; ctx.lineWidth = 4; ctx.strokeRect(x, y, fw, fh);
+      sheetTimes.push(t); cell++; frames++;
+      if (cell === PER_SHEET) await flush();
+      onProgress?.(0.8 + 0.2 * (n + 1) / times.length);
     }
-    return stills;
-  } catch { return []; }  // the video alone still works
+    await flush();
+    return { frames, sheets };
+  } catch { return { frames: 0, sheets: [] }; }  // the video alone still works
   finally { URL.revokeObjectURL(v.src); v.remove(); }
 }
 
@@ -670,10 +746,11 @@ $("#go").addEventListener("click", async () => {
   const video = picked.find((f) => f.type.startsWith("video/") || /\.(mov|mp4|m4v)$/i.test(f.name));
   const images = picked.filter((f) => f.type.startsWith("image/")).slice(0, 20);
   ctl = new AbortController();
+  strikes = new Map();
   $("#go").disabled = true; $("#stop").hidden = false;
   try {
-    const parts = [], stillParts = [];
-    let shots = [];
+    const parts = [], sheets = [];
+    let scan = { frames: 0, sheets: [] };
     if (video) {
       if (video.size <= INLINE_LIMIT) {
         setStatus("Getting the video ready…", "busy");
@@ -684,41 +761,45 @@ $("#go").addEventListener("click", async () => {
         parts.push({ file_data: { file_uri: uploaded.uri, mime_type: uploaded.mimeType }, video_metadata: { fps: 2 } });
       }
       setStatus("Scanning the video for settings screens…", "busy");
-      shots = await scanStills(video, (f) => setStatus(`Scanning the video for settings screens… ${Math.round(f * 100)}%`, "busy"));
-      if (shots.length) {
-        stillParts.push({ text: `Sharp stills of every moment the screen changes, in order (${shots.length} total). Settings panels may flash by for only a fraction of a second, so read every number on every still:` });
-        for (const shot of shots) {
-          stillParts.push({ text: `At ${shot.t.toFixed(1)}s:` });
-          stillParts.push({ inline_data: { mime_type: "image/jpeg", data: await b64(shot.blob) } });
-        }
-        parts.push(...stillParts);
+      scan = await scanStills(video, (f) => setStatus(`Scanning the video for settings screens… ${Math.round(f * 100)}%`, "busy"));
+      for (const sheet of scan.sheets) {
+        sheets.push({ label: `Moments at ${sheet.times.map((t) => t.toFixed(1) + "s").join(", ")}:`, data: await b64(sheet.blob) });
       }
     } else {
       for (const img of images) parts.push({ inline_data: { mime_type: img.type, data: await b64(img) } });
     }
     const caption = $("#caption").value.trim();
     parts.push({ text: (caption ? `<caption>\n${caption}\n</caption>\n\n` : "")
-      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too. Use the sharp stills to read the exact numbers: go through them one by one, and list every value on every settings panel they show." : "These are screenshots of the tutorial, in order. Extract every setting.") });
+      + (video ? "Extract every setting from this tutorial. Listen to the voiceover too: list everything said out loud. Close-up pictures of the video are read separately, so here focus on the voiceover, the caption, and the overall look (title, summary, apps, gear, steps)." : "These are screenshots of the tutorial, in order. Extract every setting.") });
 
-    setStatus("Gemini is watching the reel. This takes up to a minute…", "busy");
+    setStatus("Gemini is watching the reel…", "busy");
     const first = clean(await askGemini(parts, ctl.signal));
-    if (first.kind !== "not_a_tutorial") {
-      setStatus("Watching again for anything it missed…", "busy");
-      try {
-        const recheckParts = stillParts.length ? stillParts : parts;
-        const second = await askGemini([...recheckParts, { text: RECHECK(first.settings) }], ctl.signal);
-        first.settings = mergeSettings(first.settings, second?.settings);
-        for (const k of ["apps", "gear", "steps", "missing"]) {
-          for (const x of clean(second)[k]) if (!first[k].includes(x)) first[k].push(x);
+    if (first.kind !== "not_a_tutorial" && sheets.length) {
+      // Small batches: Gemini reads 12 moments much more carefully than 75 at once.
+      const BATCH = 3, onScreen = [];
+      const total = Math.ceil(sheets.length / BATCH);
+      for (let b = 0; b < total; b++) {
+        setStatus(`Reading the settings screens… part ${b + 1} of ${total}`, "busy");
+        const batch = sheets.slice(b * BATCH, (b + 1) * BATCH);
+        const batchParts = [{ text: `Below are ${batch.length} images from part of a tutorial video. Each is a 2 x 2 grid of moments, in time order: top-left, top-right, bottom-left, bottom-right. The yellow label on each moment is its time in seconds. Moments are about 0.2 seconds apart. Read every moment, one by one.` }];
+        for (const sh of batch) batchParts.push({ text: sh.label }, { inline_data: { mime_type: "image/jpeg", data: sh.data } });
+        batchParts.push({ text: "This is only one part of the video. List every setting shown in these moments (only what is visible here). If no settings panel is visible, return an empty settings list." });
+        try {
+          const r = await askGemini(batchParts, ctl.signal);
+          onScreen.push(...cleanSettings(r?.settings));
+          for (const k of ["apps", "gear", "missing"]) for (const x of clean(r)[k]) if (!first[k].includes(x)) first[k].push(x);
+        } catch (e) {
+          if (e?.name === "AbortError") throw e;
+          first.missing.push(`Part ${b + 1} of the video's settings screens couldn't be read (${friendly(e) || "error"}). Try again later.`);
         }
-      } catch (e) {
-        if (e?.name === "AbortError") throw e;  // otherwise keep the first pass
       }
+      // What was read from the screens wins; the video pass adds what was only said or captioned.
+      first.settings = mergeSettings(dedupe(fixMixerOrder(sortByTime(onScreen))), first.settings, false);
     }
     const look = {
       id: "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       ...first, url: $("#link").value.trim(), notes: "", created: Date.now(),
-      readWith: { version: VERSION, screens: shots.length, video: !!video },
+      readWith: { version: VERSION, screens: scan.frames, video: !!video },
       thumb: await thumbOf(video || images[0]),
     };
     await saveLook(look);
